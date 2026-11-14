@@ -1,0 +1,1 @@
+Match the 3.5 desktop brand: rounded pale blush tile, three rounded WiFi arcs in light red, light blue and muted lavender, one lavender dot. No letters, no gradients, no shadows. Keep the existing sidebar WiFi mark geometry. Deterministic SVG source: assets/njust-logo.svg.

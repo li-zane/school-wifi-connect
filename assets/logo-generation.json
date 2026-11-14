@@ -1,0 +1,26 @@
+{
+  "method": "SVG-derived deterministic rasterization",
+  "source": "assets/njust-logo.svg",
+  "palette": [
+    "#fdf6f8",
+    "#e799aa",
+    "#91b2ee",
+    "#b29acb",
+    "#9b9dd2"
+  ],
+  "icon_sizes": [
+    16,
+    24,
+    32,
+    48,
+    64,
+    128,
+    256
+  ],
+  "runtime_webp_size": [
+    96,
+    96
+  ],
+  "source_sha256": "d23431013f40d8a26dc89a2898856d9793a600b0f19995bf4762791b77a3189d",
+  "native_icon_encoding": "16-128px Windows DIB; 256px PNG (WinForms Icon.ToBitmap compatibility)"
+}
