@@ -15,7 +15,7 @@ DEFAULTS = {"ssid": "NJUST", "fallback_networks": [], "domain": "default",
             "startup_enabled": False, "auto_start_monitor": False,
             "connectivity_timeout_ms": 5000,
             "connectivity_checks": "http://www.msftconnecttest.com/connecttest.txt|200|Microsoft Connect Test;http://connect.rom.miui.com/generate_204|204|",
-            "show_portal": False}
+            "show_portal": False, "close_behavior": "ask", "proxy_fail_open": False}
 
 
 def data_directory() -> Path:
@@ -116,6 +116,10 @@ def validate_settings(raw: dict) -> dict:
     for key in ("remember_credentials", "startup_enabled", "auto_start_monitor", "show_portal"):
         if not isinstance(result[key], bool):
             raise ValueError("开关设置格式不正确")
+    if result["close_behavior"] not in ("ask", "tray", "exit"):
+        raise ValueError("关闭行为应为询问、托盘或退出")
+    if not isinstance(result["proxy_fail_open"], bool):
+        raise ValueError("代理保护开关格式不正确")
     return result
 
 

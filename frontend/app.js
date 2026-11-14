@@ -8,6 +8,10 @@
 // ==========================================================================
 import { initOnboarding } from './onboarding.js';
 import { initUpdates } from './updates.js';
+import { initAutoSave } from './autosave.js';
+import { initWindow } from './window.js';
+import { initProxy } from './proxy.js';
+let autosave, proxyUI;
 
 let sessionToken = null;
 let pollTimer = null;
@@ -462,7 +466,7 @@ function syncControls() {
   if (dom.btnAddFallback) {
     dom.btnAddFallback.disabled = pending || currentFallbackNetworks.length >= 8;
   }
-  dom.formConfig.querySelectorAll('input,textarea').forEach(input => { input.disabled = configSaving; });
+
   dom.fallbackNetworksList.querySelectorAll('.fallback-network-row').forEach((row, index, rows) => {
     const buttons = row.querySelectorAll('.btn-mini-action');
     buttons.forEach(button => { button.disabled = pending; });
@@ -860,6 +864,7 @@ function deleteFallbackNetwork(index) {
   if (index >= 0 && index < currentFallbackNetworks.length) {
     currentFallbackNetworks.splice(index, 1);
     renderFallbackNetworks();
+    autosave?.queueFallbacks();
   }
 }
 
@@ -873,6 +878,7 @@ function moveFallbackNetwork(index, direction) {
   currentFallbackNetworks[index] = currentFallbackNetworks[targetIndex];
   currentFallbackNetworks[targetIndex] = temp;
   renderFallbackNetworks();
+  autosave?.queueFallbacks();
 
   // 聚焦移动后所在位置的输入框
   const rows = dom.fallbackNetworksList.querySelectorAll('.fallback-network-row');
@@ -978,6 +984,19 @@ function renderProbesList() {
       left.appendChild(textCol);
       li.appendChild(left);
 
+      const route = document.createElement('select');
+      route.className = 'glass-input probe-route'; route.setAttribute('aria-label', `${probe.name} 的网络方式`);
+      for (const [value, text] of [['follow','跟随系统'],['direct','直连'],['proxy','代理 / TUN']]) {
+        const option = new Option(text, value); route.add(option);
+      }
+      route.value = probe.routing || 'follow';
+      route.addEventListener('change', async () => {
+        route.disabled = true;
+        try { await apiRequest('/api/proxy/policy', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:probe.id, mode:route.value})}); showToast('网络方式已设置', 'success'); }
+        catch(error) { route.value = probe.routing || 'follow'; showToast(error.message, 'error'); }
+        finally { route.disabled = false; await loadProbes(); proxyUI?.refresh(); }
+      });
+      li.appendChild(route);
       const stateSpan = document.createElement('span');
       const stateMap = {
         running: { text: '运行中', cls: 'state-running' },
@@ -1259,6 +1278,7 @@ async function loadConfig() {
     if (dom.cfgTimeout) dom.cfgTimeout.value = data.connectivity_timeout_ms ?? 5000;
     if (dom.cfgChecks) dom.cfgChecks.value = data.connectivity_checks ?? '';
     if (dom.cfgShowPortal) dom.cfgShowPortal.checked = Boolean(data.show_portal);
+    document.getElementById('cfg-close-behavior').value = data.close_behavior || 'ask';
 
     // 备用网络有序数组回显
     currentFallbackNetworks = Array.isArray(data.fallback_networks)
@@ -1291,189 +1311,6 @@ async function loadConfig() {
   } catch (err) {
     console.error('加载设置失败:', err);
   }
-}
-
-async function handleConfigSubmit(e) {
-  e.preventDefault();
-  if (isBusy || configSaving || mutationPending) return;
-
-  const ssid = dom.cfgSsid.value.trim();
-  const intervalMinutes = parseInt(dom.cfgInterval.value, 10);
-  const domain = dom.cfgDomain.value.trim() || 'default';
-  const username = dom.cfgUsername.value.trim();
-  const password = dom.cfgPassword.value;
-  const rememberCredentials = dom.cfgRemember.checked;
-  const startupEnabled = dom.cfgStartup.checked;
-  const autoStartMonitor = dom.cfgAutoMonitor.checked;
-
-  const timeoutMs = parseInt(dom.cfgTimeout.value, 10);
-  const connectivityChecks = dom.cfgChecks.value.trim();
-  const showPortal = dom.cfgShowPortal.checked;
-
-  // 1. NJUST WIFI SSID 校验 (可留空，非空则不超过 32 字节)
-  if (ssid && new TextEncoder().encode(ssid).length > 32) {
-    showConfigFeedback('NJUST WIFI 不能超过 32 字符', true);
-    dom.cfgSsid.focus();
-    return;
-  }
-
-  // 2. 备用 WiFi 列表校验
-  syncFallbackNetworksFromDOM();
-  const validFallbackNetworks = [];
-  const seenSsids = new Set(ssid ? [ssid.toLowerCase()] : []);
-
-  for (let i = 0; i < currentFallbackNetworks.length; i++) {
-    const net = currentFallbackNetworks[i];
-    const netSsid = (net.ssid || '').trim();
-    const netPwd = net.password || '';
-
-    // 空 ssid 且 password 空的新行忽略
-    if (!netSsid && !netPwd) {
-      continue;
-    }
-
-    // 有 password 没 ssid 要提示
-    if (!netSsid && netPwd) {
-      showConfigFeedback(`备用网络第 ${i + 1} 项填写了密码但未填写网络名称 (SSID)`, true);
-      return;
-    }
-
-    // 字节长度检查 (1-32)
-    if (new TextEncoder().encode(netSsid).length > 32) {
-      showConfigFeedback(`备用网络「${netSsid}」名称超过 32 字节`, true);
-      return;
-    }
-
-    // 重复 SSID 拒绝
-    if (seenSsids.has(netSsid.toLowerCase())) {
-      showConfigFeedback(`备用网络存在重复的网络名称: ${netSsid}`, true);
-      return;
-    }
-    seenSsids.add(netSsid.toLowerCase());
-
-    if (netPwd && !(/^[\x20-\x7e]{8,63}$/.test(netPwd) || /^[0-9a-fA-F]{64}$/.test(netPwd))) {
-      showConfigFeedback(`第 ${i + 1} 个 WiFi 密码需为 8–63 位 ASCII 字符`, true);
-      return;
-    }
-
-    validFallbackNetworks.push({
-      ssid: netSsid,
-      password: netPwd
-    });
-  }
-
-  if (validFallbackNetworks.length > 8) {
-    showConfigFeedback('备用网络数量不能超过 8 个', true);
-    return;
-  }
-
-  // 3. 认证域校验
-  if (domain && !/^[A-Za-z0-9_.@-]{1,64}$/.test(domain)) {
-    showConfigFeedback('认证域格式不正确 (最长64字符)', true);
-    dom.cfgDomain.focus();
-    return;
-  }
-
-  // 4. 检测间隔校验
-  if (Number.isNaN(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 120) {
-    showConfigFeedback('检测周期需在 1-120 分钟内', true);
-    dom.cfgInterval.focus();
-    return;
-  }
-
-  // 5. HTTP 超时校验
-  if (Number.isNaN(timeoutMs) || timeoutMs < 1000 || timeoutMs > 30000) {
-    showConfigFeedback('HTTP 超时需在 1000 至 30000 毫秒之间', true);
-    dom.cfgTimeout.focus();
-    return;
-  }
-
-  // 6. 换账号同时填密码
-  if (username && !password && !hasSavedCredentials) {
-    showConfigFeedback('更换或输入新账号时，必须同时输入对应的认证密码', true);
-    dom.cfgPassword.focus();
-    return;
-  }
-
-  const payload = {
-    ssid,
-    fallback_networks: validFallbackNetworks,
-    domain,
-    interval_minutes: intervalMinutes,
-    username,
-    password,
-    remember_credentials: rememberCredentials,
-    startup_enabled: startupEnabled,
-    auto_start_monitor: autoStartMonitor,
-    connectivity_timeout_ms: timeoutMs,
-    connectivity_checks: connectivityChecks,
-    show_portal: showPortal
-  };
-
-  try {
-    dom.btnSaveConfig.disabled = true;
-    showConfigFeedback('正在保存...');
-
-    configSaving = true;
-    syncControls();
-    await apiRequest('/api/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    showConfigFeedback('设置已保存');
-
-
-    // 保存后先 loadConfig 并 loadCredentials，再更新 status/balance
-    await loadConfig();
-    await loadCredentials();
-    await Promise.all([loadStatus(), loadBalance()]);
-  } catch (err) {
-    showConfigFeedback(`保存失败: ${err.message}`, true);
-
-  } finally {
-    configSaving = false;
-    syncControls();
-  }
-}
-
-function showConfigFeedback(text, isError = false) {
-  showToast(text, isError ? 'error' : text === '正在保存...' ? 'info' : 'success', isError ? 5000 : 3000);
-}
-
-function handleForgetCredentials() {
-  if (!hasSavedCredentials || isBusy) return;
-
-  if (isServiceRunning) {
-    showToast('清除凭据前请先暂停监控', 'error');
-    return;
-  }
-
-  requestConfirm(
-    '确认清除凭据',
-    '确定要清除系统保存的账号和密码吗？清除后将无法自动登录校园网。',
-    async () => {
-      try {
-        await apiRequest('/api/credentials/forget', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({})
-        });
-
-        // 清除账号后清空输入框
-        if (dom.cfgUsername) dom.cfgUsername.value = '';
-        if (dom.cfgPassword) dom.cfgPassword.value = '';
-
-        showToast('已清除账号与密码', 'success');
-        await loadConfig();
-        await loadCredentials();
-        await loadBalance();
-      } catch (err) {
-        showToast(`清除失败: ${err.message}`, 'error');
-      }
-    }
-  );
 }
 
 // ==========================================================================
@@ -1728,6 +1565,7 @@ async function refreshCycle() {
   isRefreshing = true;
   try {
     const requests = [loadStatus(), loadBalance()];
+    proxyUI?.refresh();
     if (!document.getElementById('panel-probes').hidden) requests.push(loadProbes());
     if (!document.getElementById('panel-logs').hidden) requests.push(loadLogs());
     await Promise.all(requests);
@@ -1870,8 +1708,8 @@ function bindEvents() {
   if (dom.btnConfirmAddProbe) dom.btnConfirmAddProbe.addEventListener('click', handleConfirmAddProbe);
 
   // 参数设置
-  if (dom.formConfig) dom.formConfig.addEventListener('submit', handleConfigSubmit);
-  if (dom.btnForgetCreds) dom.btnForgetCreds.addEventListener('click', handleForgetCredentials);
+  if (dom.formConfig) dom.formConfig.addEventListener('submit', event => { event.preventDefault(); autosave?.saveAll(); });
+
 
   // 日志筛选与操作
   const syncLogFilterClearBtn = () => {
@@ -1951,6 +1789,11 @@ async function initApp() {
       loadLogs()
     ]);
     startPolling();
+    autosave = initAutoSave({apiRequest, showToast, ready: () => configLoaded && !mutationPending,
+      fallbacks: () => { syncFallbackNetworksFromDOM(); return currentFallbackNetworks.filter(n => n.ssid.trim() || n.password).map(n => ({ssid:n.ssid.trim(), password:n.password})); },
+      onSaved: () => { hasSavedCredentials = Boolean(dom.cfgUsername.value && dom.cfgPassword.value); }});
+    initWindow({apiRequest, showToast, flush: () => autosave.flush()});
+    proxyUI = initProxy({apiRequest, showToast});
     initUpdates({apiRequest, showToast});
     if (configLoaded) initOnboarding({switchTab, isConfigured: Boolean(hasSavedCredentials || currentFallbackNetworks.length || isServiceRunning), getRunning: () => isServiceRunning});
   } catch (err) {

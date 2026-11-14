@@ -13,6 +13,7 @@
 
   <div class="glass-app">
     <aside class="desktop-sidebar">
+      <div class="brand-zone" data-window-drag><div class="brand-logo-wrap"><img src="logo.webp" class="brand-logo" alt="" draggable="false"></div><h1 class="brand-title">NJUST WiFi</h1></div>
       <nav class="glass-segmented-tabs" role="tablist" aria-label="功能分区" aria-orientation="vertical">
         <button class="seg-tab active" id="tab-btn-status" role="tab" aria-selected="true" aria-controls="panel-status" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -60,7 +61,7 @@
     </aside>
 
     <div class="desktop-workspace">
-      <header class="glass-header">
+      <header class="glass-header" data-window-drag>
         <h2 id="page-title">连接状态</h2>
         <div class="header-actions">
           <button id="btn-update" class="btn-glass-pill" type="button" aria-label="检查更新"><span id="update-label">检查更新</span></button>
@@ -78,6 +79,11 @@
             </svg>
             <span id="theme-icon-text">深色模式</span>
           </button>
+          <div class="window-controls" hidden>
+            <button id="window-min" type="button" aria-label="最小化" title="最小化"><svg viewBox="0 0 20 20"><path d="M5 11h10"/></svg></button>
+            <button id="window-max" type="button" aria-label="最大化或还原" title="最大化或还原"><svg viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="1"/></svg></button>
+            <button id="window-close" type="button" aria-label="关闭窗口" title="关闭窗口"><svg viewBox="0 0 20 20"><path d="m6 6 8 8M14 6l-8 8"/></svg></button>
+          </div>
         </div>
       </header>
 
@@ -293,16 +299,7 @@
                 </label>
               </div>
 
-              <div class="config-actions-row">
-                <div class="actions-left-group">
-                  <button id="btn-forget-creds" type="button" class="btn-glass-action btn-warn-text" disabled>
-                    清除账号密码
-                  </button>
-                  <button id="btn-save-config" type="submit" class="btn-espresso">
-                    <span class="btn-label">保存设置</span>
-                  </button>
-                </div>
-              </div>
+              <span id="autosave-state" class="autosave-state" role="status" aria-live="polite">自动保存</span>
             </div>
 
             <div class="settings-card fallback-settings">
@@ -334,7 +331,7 @@
                     <span>高级设置</span>
                   </span>
                   <span class="summary-right">
-                    <span class="summary-hint">认证域 · 超时 · 端点 · 浏览器</span>
+                    <span class="summary-hint">认证 · 网络 · 窗口</span>
                     <svg class="summary-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <polyline points="6 9 12 15 18 9"/>
                     </svg>
@@ -359,6 +356,10 @@
                     <textarea id="cfg-checks" name="connectivity_checks" class="glass-textarea" rows="2" placeholder="url|status|text;url|status|text" spellcheck="false"></textarea>
                   </div>
 
+                  <div class="field-slot">
+                    <label for="cfg-close-behavior" class="slot-label">关闭窗口时</label>
+                    <select id="cfg-close-behavior" class="glass-input"><option value="ask">每次询问</option><option value="tray">关闭到托盘</option><option value="exit">退出程序</option></select>
+                  </div>
                   <div class="switches-row switches-compact">
                     <label class="glass-check-item">
                       <input type="checkbox" id="cfg-show-portal" name="show_portal" class="glass-checkbox">
@@ -374,6 +375,12 @@
         <!-- 守护页 -->
         <section id="panel-probes" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-probes" hidden>
           <div class="glass-panel probes-workspace">
+            <div class="proxy-card">
+              <div class="section-title-row"><span class="slot-section-title">代理保护</span><span id="proxy-status" class="glass-pill pill-subtle">未启用</span></div>
+              <div class="proxy-actions"><label class="glass-check-item"><input id="proxy-fail-open" type="checkbox" class="glass-checkbox"><span>代理故障时自动切换全机直连</span></label><button id="proxy-restore" type="button" class="btn-glass-action btn-sm" disabled>恢复代理</button></div>
+              <div class="proxy-actions"><label for="proxy-group">代理组</label><select id="proxy-group" class="glass-input"><option value="">未选择</option></select><button id="proxy-detect" type="button" class="btn-glass-action btn-sm">连接客户端</button></div>
+              <p class="proxy-note">支持 Clash Verge / Mihomo。直连避开代理节点；全机切换后可手动恢复。</p>
+            </div>
             <div class="probes-toolbar">
               <div class="toolbar-left">
                 <label class="glass-check-item select-all-label">
@@ -502,6 +509,14 @@
     </div>
   </dialog>
 
+  <dialog id="modal-close" class="glass-modal" aria-labelledby="close-title">
+    <div class="glass-modal-card confirm-modal-card">
+      <h3 id="close-title" class="modal-title">准备休息了吗？</h3>
+      <p class="confirm-desc-text">留在托盘，继续守护网络。</p>
+      <label class="glass-check-item"><input id="close-remember" type="checkbox" class="glass-checkbox"><span>记住我的选择</span></label>
+      <div class="modal-actions-row"><button id="close-cancel" class="btn-glass-action" type="button">取消</button><button id="close-exit" class="btn-glass-action" type="button">退出程序</button><button id="close-tray" class="btn-espresso" type="button">关闭到托盘</button></div>
+    </div>
+  </dialog>
   <script type="module" src="app.js"></script>
 </body>
 </html>

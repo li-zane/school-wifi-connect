@@ -17,3 +17,7 @@ private-probes.json
 build/
 dist/
 *.spec
+
+routing-settings.json
+proxy-recovery.json
+proxy-script-original.js

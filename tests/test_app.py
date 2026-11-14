@@ -257,9 +257,10 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.call("/../app.py")[0], 404)
         self.assertEqual(self.call("/.env.local")[0], 404)
 
-    def test_busy_settings_and_duplicate_check_are_rejected(self):
+    def test_busy_settings_save_for_next_cycle_and_duplicate_check_is_rejected(self):
         self.service.busy = True
-        self.assertEqual(self.call("/api/config", {"interval_minutes": 7})[0], 400)
+        self.assertEqual(self.call("/api/config", {"interval_minutes": 7})[0], 200)
+        self.assertEqual(self.service.store.settings["interval_minutes"], 7)
         self.assertEqual(self.call("/api/check", {})[0], 400)
         self.assertEqual(self.call("/api/credentials/forget", {})[0], 400)
         self.service.busy = False

@@ -18,6 +18,7 @@ from .probes import ApplicationGuards
 from .balance import BalanceClient, BalanceUnavailable
 from .wlan import read_profile_passwords
 from .updater import UpdateManager
+from .proxy import ProxyProtection
 
 TASK_NAME = "NjustWifiLocalMonitor"
 
@@ -78,6 +79,8 @@ class Service:
         self.balance_attempt = 0.0
         self._balance = self._empty_balance()
         self.guards = ApplicationGuards(store.root)
+        self.proxy = ProxyProtection(store.root, demo=demo)
+        self.proxy_wake = threading.Event()
         if (store.root / "events.jsonl").exists():
             legacy_normal = None
             with (store.root / "events.jsonl").open("rb") as stream:
@@ -112,6 +115,8 @@ class Service:
             self._save_logs()
         self.worker = threading.Thread(target=self._work, name="wifi-monitor", daemon=True)
         self.worker.start()
+        self.proxy_worker = threading.Thread(target=self._proxy_work, name="proxy-protection", daemon=True)
+        self.proxy_worker.start()
         if store.credential_error:
             self.event("error", "已保存的凭据读取失败，请重新填写账号密码")
 
@@ -265,8 +270,6 @@ class Service:
 
     def configure(self, raw: dict) -> None:
         with self.lock:
-            if self.busy:
-                raise ValueError("正在检测，请稍后保存设置")
             previous = self.store.settings.copy()
             previous_username = self.store.username
             # Validate and save before touching Task Scheduler.
@@ -281,7 +284,12 @@ class Service:
                 except ValueError:
                     self.store.update({"startup_enabled": previous["startup_enabled"]})
                     raise
-            if self.running:
+            if previous["proxy_fail_open"] != self.store.settings["proxy_fail_open"]:
+                self.proxy.failures = 0
+                self.proxy_wake.set()
+            # New values apply to the next cycle; appearance changes never trigger reconnection.
+            network_keys = {"ssid", "fallback_networks", "domain", "interval_minutes", "connectivity_timeout_ms", "connectivity_checks", "show_portal"}
+            if self.running and (any(previous[k] != self.store.settings[k] for k in network_keys) or previous_username != self.store.username):
                 self.wake.set()
 
     def forget(self) -> None:
@@ -302,7 +310,7 @@ class Service:
 
     def probe_items(self):
         with self.lock:
-            return self.guards.items()
+            return [item | {'routing':self.proxy.policies.get(item['id'], 'follow')} for item in self.guards.items()]
 
     def probe_action(self, action: str, raw: dict):
         with self.lock:
@@ -312,9 +320,12 @@ class Service:
             if action == "add":
                 self.guards.add(raw.get("paths"))
             elif action == "remove":
+                selected = self.guards.selected(raw.get("ids"))
+                self.proxy.remove(self.guards.paths, {self.guards.identifier(path) for path in selected})
                 self.guards.remove(raw.get("ids"))
             elif action == "clear":
                 if self.guards.paths:
+                    self.proxy.remove(self.guards.paths, {self.guards.identifier(path) for path in self.guards.paths})
                     self.guards.remove([self.guards.identifier(path) for path in self.guards.paths])
             elif action == "elevate":
                 if self.demo:
@@ -325,6 +336,27 @@ class Service:
                 raise ValueError("程序操作不存在")
             for removed in previous - {self.guards.identifier(path) for path in self.guards.paths}:
                 self.health('guard:' + removed, '', False)
+
+    def proxy_action(self, action, raw):
+        if action == 'restore':
+            self.proxy.restore()
+        elif action in ('policy', 'group'):
+            with self.lock:
+                paths = list(self.guards.paths)
+            if action == 'policy':
+                self.proxy.configure(paths, identifier=raw.get('id', ''), mode=raw.get('mode'))
+            else:
+                self.proxy.configure(paths, group=raw.get('group', ''))
+        else:
+            raise ValueError("代理操作不存在")
+
+    def _proxy_work(self):
+        while not self.closed.is_set():
+            enabled = self.store.settings["proxy_fail_open"] and not self.demo
+            if enabled:
+                self.proxy.tick(self.closed, self.guard_event, lambda: self.store.settings["proxy_fail_open"])
+            self.proxy_wake.wait(15 if enabled else None)
+            self.proxy_wake.clear()
 
     def candidates(self):
         if self.demo:
@@ -419,8 +451,10 @@ class Service:
     def close(self):
         self.stop()
         self.closed.set()
+        self.proxy_wake.set()
         self.wake.set()
         self.worker.join(timeout=20)
+        self.proxy_worker.join(timeout=15)
         if self.balance_worker:
             self.balance_worker.join(timeout=15)
 

@@ -2,7 +2,7 @@ const STORAGE_KEY = 'njust_onboarding_v1';
 const STEPS = [
   {tab: 'panel-config', target: '.account-slots-section .form-slots-grid', title: '填写校园账号', text: '校园网填学号和密码；只用备用 WiFi 可跳过。'},
   {tab: 'panel-config', target: '.fallback-networks-section .section-title-row', title: '添加备用 WiFi', text: '填好网络和密码，靠前的优先连接。'},
-  {tab: 'panel-config', target: '#btn-save-config', title: '保存设置', text: '填好后点保存，之后随时能修改。'},
+  {tab: 'panel-config', target: '#autosave-state', title: '修改即保存', text: '填好后移开光标即可，开关和排序也会自动保存。'},
   {tab: 'panel-status', target: '#btn-toggle-service', title: '开始监控', text: '自动检测网络，断网时尝试恢复。'},
   {tab: 'panel-probes', target: '#btn-open-add-probe', title: '认识程序守护', text: '可选添加常用程序，退出后尝试拉起。'}
 ];

@@ -13,6 +13,9 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/styles.css": ("styles.css", "text/css; charset=utf-8"),
           "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/onboarding.js": ("onboarding.js", "text/javascript; charset=utf-8"),
+          "/autosave.js": ("autosave.js", "text/javascript; charset=utf-8"),
+          "/window.js": ("window.js", "text/javascript; charset=utf-8"),
+          "/proxy.js": ("proxy.js", "text/javascript; charset=utf-8"),
           "/updates.js": ("updates.js", "text/javascript; charset=utf-8"),
           "/onboarding.css": ("onboarding.css", "text/css; charset=utf-8"),
           "/logo.webp": ("logo.webp", "image/webp")}
@@ -112,6 +115,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, service.config_view())
         elif self.path == "/api/update":
             self.send(200, service.updater.status())
+        elif self.path == "/api/proxy":
+            self.send(200, service.proxy.status() | {'enabled':service.store.settings['proxy_fail_open']})
+        elif self.path == "/api/proxy/groups":
+            try:
+                self.send(200, {'groups':service.proxy.groups()})
+            except ValueError as exc:
+                self.send(400, {'error':str(exc)})
         elif self.path == "/api/credentials":
             with service.lock:
                 self.send(200, service.store.credentials())
@@ -172,6 +182,8 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/probes/browse":
                 self.send(200, {"candidates": service.browse()})
                 return
+            elif self.path in ('/api/proxy/policy','/api/proxy/group','/api/proxy/restore'):
+                service.proxy_action(self.path.rsplit('/',1)[1], raw)
             elif self.path in ("/api/probes/add", "/api/probes/remove", "/api/probes/clear", "/api/probes/elevate"):
                 service.probe_action(self.path.rsplit("/", 1)[1], raw)
             elif self.path == "/api/logs/clear":

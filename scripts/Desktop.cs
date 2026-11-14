@@ -99,7 +99,7 @@ internal sealed class DesktopWindow : GlassWindow
     private readonly EventWaitHandle showSignal;
     private RegisteredWaitHandle showWait;
     private bool initializing;
-    private readonly System.Windows.Forms.Timer minimizeTimer;
+    private bool allowClose, exiting, pageReady;
 
     internal DesktopWindow()
     {
@@ -115,19 +115,44 @@ internal sealed class DesktopWindow : GlassWindow
             }, null, Timeout.Infinite, false);
             await Initialize();
         };
-        minimizeTimer = new System.Windows.Forms.Timer { Interval = 500 };
-        minimizeTimer.Tick += (s, e) => { minimizeTimer.Stop(); ToTray(); };
-        Resize += (s, e) => { if (WindowState == FormWindowState.Minimized) minimizeTimer.Start(); };
+        FormClosing += async (s, e) => {
+            if (allowClose || e.CloseReason == CloseReason.WindowsShutDown || e.CloseReason == CloseReason.TaskManagerClosing) return;
+            e.Cancel = true;
+            if (pageReady && view != null && view.CoreWebView2 != null)
+                await view.CoreWebView2.ExecuteScriptAsync("window.dispatchEvent(new Event('njust-close-request'))");
+            else {
+                var choice = MessageBox.Show(this, "退出程序？选择“否”关闭到托盘。", "NJUST WiFi", MessageBoxButtons.YesNoCancel);
+                if (choice == DialogResult.Yes) await ExitProgram();
+                else if (choice == DialogResult.No) ToTray();
+            }
+        };
         FormClosed += (s, e) => {
             if (showWait != null) showWait.Unregister(null);
-            showSignal.Dispose(); minimizeTimer.Dispose();
+            showSignal.Dispose();
             ReleaseView();
         };
     }
 
     private void ToTray()
     {
-        Close();
+        allowClose = true; Close();
+    }
+
+    private async Task ExitProgram()
+    {
+        if (exiting) return;
+        exiting = true;
+        if (await Program.RunBackend("--stop-background")) {
+            for (int i = 0; i < 40 && await Program.Healthy(); i++) await Task.Delay(250);
+            if (await Program.Healthy()) {
+                exiting = false; MessageBox.Show(this, "后台仍在退出，请稍后重试。", "NJUST WiFi"); return;
+            }
+            using (var signal = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\NjustWifiTrayExit" + Program.Port)) signal.Set();
+            allowClose = true; Close();
+        } else {
+            exiting = false;
+            MessageBox.Show(this, "后台尚未退出，请重试。", "NJUST WiFi");
+        }
     }
 
     private async void Restore()
@@ -168,11 +193,19 @@ internal sealed class DesktopWindow : GlassWindow
             Content.Controls.Add(view); view.BringToFront();
             await view.EnsureCoreWebView2Async(environment);
             var core = view.CoreWebView2;
-            core.WebMessageReceived += (s, e) => {
+            await core.AddScriptToExecuteOnDocumentCreatedAsync("window.NJUST_DESKTOP = true;");
+            core.WebMessageReceived += async (s, e) => {
                 if (e.Source != Program.Origin + "/") return;
                 try {
                     string message = e.TryGetWebMessageAsString();
                     if (message == "theme:dark" || message == "theme:light") SetChromeTheme(message == "theme:dark");
+                    else if (message == "window:ready") pageReady = true;
+                    else if (message == "window:minimize") WindowState = FormWindowState.Minimized;
+                    else if (message == "window:maximize") ToggleMaximize();
+                    else if (message == "window:drag") DragWindow();
+                    else if (message == "window:close") Close();
+                    else if (message == "window:tray") ToTray();
+                    else if (message == "window:exit") await ExitProgram();
                 } catch (ArgumentException) { }
             };
             core.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low;

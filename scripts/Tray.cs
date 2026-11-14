@@ -37,6 +37,8 @@ internal sealed class TrayContext : ApplicationContext
     private readonly Control invoker = new Control();
     private readonly EventWaitHandle showSignal;
     private readonly RegisteredWaitHandle wait;
+    private readonly EventWaitHandle exitSignal;
+    private readonly RegisteredWaitHandle exitWait;
     private readonly string arguments;
     private readonly string backendArguments;
     private readonly string root = AppDomain.CurrentDomain.BaseDirectory;
@@ -80,6 +82,10 @@ internal sealed class TrayContext : ApplicationContext
         wait = ThreadPool.RegisterWaitForSingleObject(showSignal, (s, timedOut) => {
             try { invoker.BeginInvoke(new Action(Open)); } catch (InvalidOperationException) { }
         }, null, Timeout.Infinite, false);
+        exitSignal = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\NjustWifiTrayExit" + port);
+        exitWait = ThreadPool.RegisterWaitForSingleObject(exitSignal, (s, timedOut) => {
+            try { invoker.BeginInvoke(new Action(ExitThread)); } catch (InvalidOperationException) { }
+        }, null, Timeout.Infinite, false);
         Open();
     }
 
@@ -112,7 +118,7 @@ internal sealed class TrayContext : ApplicationContext
     {
         if (disposing)
         {
-            wait.Unregister(null); showSignal.Dispose(); invoker.Dispose();
+            wait.Unregister(null); exitWait.Unregister(null); showSignal.Dispose(); exitSignal.Dispose(); invoker.Dispose();
             tray.Visible = false; tray.Dispose(); if (window != null) window.Dispose();
             job.Dispose();
         }
