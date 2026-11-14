@@ -10,7 +10,7 @@
 
 ## 在线发布
 
-修改 `njust_wifi/__init__.py` 版本并推送对应 `vX.Y.Z` 标签，GitHub Actions 会执行测试、构建并发布 Windows ZIP、源码 ZIP 和 `SHA256.json`。更新只在用户点击时检查，安装在可写目录中进行，并保留原版本备份。源码运行支持检查版本，应用内安装需使用桌面发布版。
+修改 `njust_wifi/__init__.py` 版本并推送对应 `vX.Y.Z` 标签，GitHub Actions 会执行测试、构建并发布 Windows ZIP、源码 ZIP 和 `SHA256.json`。公共 API 限流时自动改用公开 Release 校验清单，无需 GitHub Token。更新只在用户点击时检查，安装在可写目录中进行，并保留原版本备份。源码运行支持检查版本，应用内安装需使用桌面发布版。
 
 
 轻量 Windows 校园网自动登录工具。Python 标准库后端、原生 HTML/CSS/JavaScript 界面和 Windows 原生托盘/窗口。使用系统 WebView2，不附带 Chromium、Node.js 或数据库。
@@ -92,7 +92,7 @@ python -m venv .venv
 
 采用目录式 EXE，避免每次启动将整个 Python 解压到临时目录。运行时无需安装 Python。构建剔除测试框架、Tk、未使用的 bz2/lzma/zstd 压缩库，并移除 Python 文档字符串；保留 HTTPS 和自定义探测能力。原生托盘不加载 WebView2 程序集，窗口关闭后所有网页进程释放。前端无持续动画，隐藏页面停止轮询，后台按检测间隔休眠。
 
-发布仅分享 `dist/NJUSTWiFi-3.7.0-Windows-x64.zip` 或源码 ZIP，禁止直接压缩整个开发目录。桌面包中的 `NJUSTWiFi.exe` 是入口，`NJUSTWiFiWindow.exe` 和 `NJUSTWiFiBackend.exe` 以及 DLL、`_internal` 均需保留。WebView2 SDK 固定版本和 SHA256 校验，发布包保留其许可证。
+发布仅分享 `dist/NJUSTWiFi-3.7.1-Windows-x64.zip` 或源码 ZIP，禁止直接压缩整个开发目录。桌面包中的 `NJUSTWiFi.exe` 是入口，`NJUSTWiFiWindow.exe` 和 `NJUSTWiFiBackend.exe` 以及 DLL、`_internal` 均需保留。WebView2 SDK 固定版本和 SHA256 校验，发布包保留其许可证。
 
 日志按本机时区显示完整日期和时间（`YYYY-MM-DD HH:mm:ss`），支持按显示的日期筛选，内容在日志页内部滚动。
 

@@ -52,6 +52,14 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(self.manager.status()['state'],'current')
         self.assertIsNone(self.manager.release)
 
+    def test_public_manifest_handles_shared_api_rate_limit_without_token(self):
+        rows=[{'file':'NJUSTWiFi-9.0.0-Windows-x64.zip','bytes':123,'sha256':'a'*64}]
+        error=urllib.error.HTTPError('https://api.github.com/',403,'rate limit',{},io.BytesIO())
+        with patch('njust_wifi.updater.read_json',side_effect=[error,rows]) as read:self.manager.check()
+        self.assertEqual(self.manager.status()['state'],'available')
+        self.assertEqual(self.manager.release['tag'],'v9.0.0')
+        self.assertIn('/releases/latest/download/SHA256.json',read.call_args.args[0])
+
     def test_incomplete_or_redirected_release_is_rejected(self):
         for broken in ({'tag_name':'v9.0.0','assets':[]},release(),release()):
             if broken.get('assets'):

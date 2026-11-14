@@ -20,6 +20,7 @@ import zipfile
 from . import __version__
 REPOSITORY = 'li-zane/school-wifi-connect'
 RELEASE_API = 'https://api.github.com/repos/' + REPOSITORY + '/releases/latest'
+LATEST_MANIFEST = 'https://github.com/' + REPOSITORY + '/releases/latest/download/SHA256.json'
 MAX_DOWNLOAD = 100 * 1024 * 1024
 MAX_EXPANDED = 350 * 1024 * 1024
 
@@ -52,6 +53,8 @@ def open_release(url):
     # GitHub may require the user's working proxy. Fall back to direct requests.
     try:
         return urllib.request.build_opener(ReleaseRedirect()).open(request, timeout=20)
+    except urllib.error.HTTPError:
+        raise
     except (OSError, urllib.error.URLError):
         return urllib.request.build_opener(urllib.request.ProxyHandler({}), ReleaseRedirect()).open(request, timeout=20)
 
@@ -156,7 +159,18 @@ class UpdateManager:
             self.set(state='error', message=message, progress=0)
 
     def check(self):
-        release = read_json(RELEASE_API)
+        try:
+            release = read_json(RELEASE_API)
+        except (OSError, urllib.error.URLError) as error:
+            if hasattr(error, 'close'): error.close()
+            # Public GitHub API quotas are shared by NAT/proxy users. The
+            # release manifest endpoint needs neither API quota nor a token.
+            rows = read_json(LATEST_MANIFEST)
+            packages = [r for r in rows if isinstance(r, dict) and re.fullmatch(r'NJUSTWiFi-\d+\.\d+\.\d+-Windows-x64\.zip', str(r.get('file', '')))] if isinstance(rows, list) else []
+            if len(packages) != 1: raise ValueError('发布校验信息不完整')
+            package = packages[0]
+            tag = 'v' + re.fullmatch(r'NJUSTWiFi-(\d+\.\d+\.\d+)-Windows-x64\.zip', package['file']).group(1)
+            release = {'tag_name': tag, 'assets': [{'name': name, 'size': package.get('bytes'), 'browser_download_url': f'https://github.com/{REPOSITORY}/releases/download/{tag}/{name}'} for name in (package['file'], 'SHA256.json')]}
         if not isinstance(release, dict) or release.get('draft') or release.get('prerelease'):
             raise ValueError('尚无可用的正式版本')
         tag = release.get('tag_name', '')
