@@ -341,6 +341,8 @@ class Service:
     def proxy_action(self, action, raw):
         if action == 'client':
             self.proxy.set_client(raw.get('client'))
+        elif action == 'controller':
+            self.proxy.configure_controller(raw)
         elif action == 'check':
             self.proxy_check_requested.set()
             self.proxy_wake.set()
@@ -362,7 +364,7 @@ class Service:
             enabled = self.store.settings["proxy_fail_open"] and not self.demo
             requested = self.proxy_check_requested.is_set()
             self.proxy_check_requested.clear()
-            synchronize = self.proxy.client=='flclash' and bool(self.proxy.policies) and not self.demo
+            synchronize = bool(self.proxy.policies or self.proxy.managed_rules) and not self.demo
             if synchronize:
                 try:
                     with self.lock:
@@ -370,7 +372,7 @@ class Service:
                     self.proxy.ensure_rules(paths)
                 except Exception:
                     with self.proxy.lock:
-                        self.proxy.state='error'; self.proxy.message='FlClash 分流待同步，请连接本地接口'
+                        self.proxy.state='error'; self.proxy.message='客户端分流待同步，请连接本地接口'
             if enabled or requested:
                 self.proxy.tick(self.closed, self.guard_event,
                     lambda: requested or self.store.settings["proxy_fail_open"],

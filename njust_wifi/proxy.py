@@ -14,6 +14,7 @@ import time
 import urllib.parse
 
 from .storage import atomic_write
+from .client_control import ClientSwitches
 
 BEGIN = '// BEGIN SCHOOL-WIFI-CONNECT'
 END = '// END SCHOOL-WIFI-CONNECT'
@@ -185,10 +186,11 @@ def pipe_request(name, request, timeout=7):
 
 
 class Controller:
-    def __init__(self, root=None, *, kind='clash-verge'):
+    def __init__(self, root=None, *, kind='clash-verge', options=None):
         if kind not in CLIENTS:
             raise ValueError('请选择支持的代理客户端')
         self.kind = kind
+        self.options = options or {}
         relative = 'com.follow/clash' if kind == 'flclash' else 'io.github.clash-verge-rev.clash-verge-rev'
         self.root = root or Path(os.environ.get('APPDATA', '')) / relative
 
@@ -214,9 +216,14 @@ class Controller:
         return text
 
     def request(self, method, path, payload=None):
-        text = self.runtime()
-        pipe = scalar(text, 'external-controller-pipe')
-        secret = scalar(text, 'secret')
+        try:
+            text = self.runtime()
+        except FileNotFoundError:
+            if not self.options.get('url'):
+                raise
+            text = ''
+        pipe = '' if self.options.get('url') else scalar(text, 'external-controller-pipe')
+        secret = self.options.get('secret', scalar(text, 'secret'))
         body = b'' if payload is None else json.dumps(payload).encode()
         if any(c in secret for c in '\r\n'):
             raise OSError('invalid controller config')
@@ -225,7 +232,7 @@ class Controller:
         if pipe.startswith('\\\\.\\pipe\\') and len(pipe) <= 200:
             raw = pipe_request(pipe, request)
         else:
-            address = urllib.parse.urlsplit('//' + scalar(text,'external-controller'))
+            address = urllib.parse.urlsplit(self.options['url'] if self.options.get('url') else '//' + scalar(text,'external-controller'))
             host = address.hostname
             if host not in ('localhost','127.0.0.1','::1','0.0.0.0','::') or not address.port or address.username or address.password or address.path:
                 raise OSError('local controller not enabled')
@@ -256,12 +263,21 @@ class Controller:
 
 
 class ProxyProtection:
-    def __init__(self, root, *, demo=False, controller=None):
+    def __init__(self, root, *, demo=False, controller=None, switches=None):
         self.root, self.demo = root, demo
         self.controller = controller
         supplied_kind = getattr(controller,'kind',None)
         self.client = supplied_kind if supplied_kind in CLIENTS else 'clash-verge'
         self.profiles = {}
+        self.managed_rules = []
+        self.controllers_path = root / 'proxy-controllers.json'
+        self.controllers = {}
+        try:
+            self.controllers = json.loads(self.controllers_path.read_text('utf-8'))
+        except (OSError, ValueError):
+            pass
+        if not isinstance(self.controllers, dict):
+            self.controllers = {}
         self.lock = threading.RLock()
         self.policies = {}
         self.group = ''
@@ -277,20 +293,24 @@ class ProxyProtection:
                 self.client = raw.get('client') if raw.get('client') in CLIENTS else self.client
                 self.profiles = {key:value for key,value in raw.get('profiles',{}).items() if key in CLIENTS and isinstance(value,dict)}
                 raw = self.profiles.get(self.client, raw)
+                self.managed_rules = [v for v in raw.get('managed_rules',[]) if isinstance(v,str) and v.startswith('PROCESS-PATH,')]
                 self.group = raw.get('group', '') if isinstance(raw.get('group'), str) else ''
                 self.policies = {key: value for key, value in raw.get('policies', {}).items() if re.fullmatch(r'[0-9a-f]{12}', key) and value in ('direct', 'proxy')}
             except (ValueError, TypeError, AttributeError):
                 pass
         if self.controller is None:
-            self.controller = Controller(kind=self.client)
+            self.controller = Controller(kind=self.client, options=self.controllers.get(self.client))
+
+        # An injected controller must never accidentally operate a real GUI in a test.
+        self.switches = switches if switches is not None else None if controller is not None else ClientSwitches(root, self.client)
 
     @property
     def recovery_path(self):
         return self.root / ('proxy-recovery-flclash.json' if self.client=='flclash' else 'proxy-recovery.json')
 
     def save(self):
-        self.profiles[self.client] = {'group':self.group, 'policies':self.policies.copy()}
-        atomic_write(self.path, json.dumps({'client':self.client, 'profiles':self.profiles, 'group':self.group, 'policies':self.policies}, ensure_ascii=False).encode())
+        self.profiles[self.client] = {'group':self.group, 'policies':self.policies.copy(), 'managed_rules':self.managed_rules}
+        atomic_write(self.path, json.dumps({'client':self.client, 'profiles':self.profiles, 'group':self.group, 'policies':self.policies, 'managed_rules':self.managed_rules}, ensure_ascii=False).encode())
 
     def set_client(self, client):
         if not isinstance(client,str) or client not in CLIENTS:
@@ -301,14 +321,54 @@ class ProxyProtection:
             profile = self.profiles.get(client,{})
             self.group = profile.get('group','')
             self.policies = profile.get('policies',{}).copy()
-            self.controller = Controller(kind=client)
+            self.managed_rules = profile.get('managed_rules',[]).copy()
+            self.controller = Controller(kind=client, options=self.controllers.get(client))
+            self.switches = ClientSwitches(self.root, client)
             self.failures = 0; self.egress = ''; self.state = 'idle'; self.message = '请选择连接客户端'
             self.save()
 
     def status(self):
         with self.lock:
             return {'state':self.state, 'message':self.message, 'group':self.group, 'client':self.client,
-                    'restore_available':self.recovery_path.exists(), 'egress':self.egress}
+                    'restore_available':self.recovery_path.exists(), 'egress':self.egress, 'controller':self.controller_status()}
+
+    def controller_status(self):
+        option = self.controllers.get(self.client,{})
+        return {'url':option.get('url',''), 'secret_set':'secret' in option,
+                'automatic':not bool(option.get('url'))}
+
+    def configure_controller(self, raw):
+        with self.lock:
+            if raw.get('client', self.client) != self.client:
+                raise ValueError('客户端已切换，请重新填写')
+            url = raw.get('url','')
+            if not isinstance(url,str):
+                raise ValueError('请输入本机控制器地址')
+            url = url.strip()
+            if url:
+                try:
+                    parsed = urllib.parse.urlsplit(url)
+                    if parsed.scheme!='http' or parsed.hostname not in ('127.0.0.1','::1','localhost') or not parsed.port or parsed.username or parsed.password or parsed.path not in ('','/') or parsed.query or parsed.fragment:
+                        raise ValueError()
+                    url = 'http://' + ('[::1]' if parsed.hostname=='::1' else '127.0.0.1') + ':' + str(parsed.port)
+                except ValueError:
+                    raise ValueError('仅支持 http://127.0.0.1:端口 的本机控制器') from None
+            option = self.controllers.get(self.client,{}).copy()
+            secret = raw.get('secret','')
+            if 'clear_secret' in raw and type(raw['clear_secret']) is not bool:
+                raise ValueError('清除密钥选项应为开关值')
+            if not isinstance(secret,str) or len(secret)>1024 or any(ord(c)<32 or ord(c)>126 for c in secret):
+                raise ValueError('密钥请使用不含换行的英文字符')
+            if raw.get('clear_secret'):
+                option.pop('secret',None)
+            elif secret:
+                option['secret'] = secret
+            option['url'] = url
+            controllers = self.controllers | {self.client:option}
+            atomic_write(self.controllers_path,json.dumps(controllers).encode())
+            self.controllers = controllers
+            self.controller = Controller(kind=self.client, options=option)
+            self.failures=0; self.egress=''; self.state='idle'; self.message='控制器设置已更新，请连接客户端'
 
     def groups(self):
         if self.demo:
@@ -359,60 +419,52 @@ class ProxyProtection:
             self.save()
 
     def _apply(self, rules, old):
+        applied=False
         try:
             general = self.controller.request('GET', '/configs')
             if general.get('mode') != 'rule':
                 raise ValueError('请先将代理客户端切换为规则模式')
             runtime = self.controller.runtime()
-            payload = apply_rules(runtime, rules, old)
+            payload = apply_rules(runtime, rules, list(old) + self.managed_rules)
+            previous = apply_rules(runtime, old, list(rules) + self.managed_rules)
             # Retain live TUN/port settings and selected nodes during a rule reload.
             if isinstance(general.get('tun'),dict):
                 payload = root_section(payload,'tun',general['tun'])
+                previous = root_section(previous,'tun',general['tun'])
             for key in ('mixed-port','port','socks-port','redir-port','tproxy-port'):
                 if key in general:
                     payload = root_value(payload,key,str(general[key]))
+                    previous = root_value(previous,key,str(general[key]))
             proxies = self.controller.request('GET','/proxies').get('proxies',{})
             selected = {name:row['now'] for name,row in proxies.items() if row.get('type')=='Selector' and row.get('now') in row.get('all',[])}
-            if self.client=='flclash':
-                target = self.controller.runtime_path
-                original = target.read_bytes()
-                updated = payload.encode('utf-8')
-                backup = self.root / 'proxy-flclash-original.yaml'
-            else:
-                target = self.controller.root / 'profiles/Script.js'
-                original = target.read_bytes()
-                updated = make_script(original.decode('utf-8-sig'), rules).encode('utf-8')
-                backup = self.root / 'proxy-script-original.js'
-            # Core validates the full config before applying. Existing custom rules remain.
+            # Let the running core validate and apply the payload. Client files stay untouched.
             self.controller.request('PUT', '/configs', {'payload':payload})
+            applied=True
             for name,choice in selected.items():
                 self.controller.request('PUT','/proxies/'+urllib.parse.quote(name,safe=''),{'name':choice})
-            try:
-                if not backup.exists():
-                    atomic_write(backup, original)
-                if target.read_bytes()!=original:
-                    raise OSError('client file changed during reload')
-                atomic_write(target, updated)
-            except OSError:
-                self.controller.request('PUT', '/configs', {'payload':runtime})
+            self.managed_rules = list(dict.fromkeys(self.managed_rules + list(old) + list(rules)))
+        except Exception as error:
+            if applied:
+                # Retain cleanup history even if a subsequent selector call or rollback fails.
+                self.managed_rules=list(dict.fromkeys(self.managed_rules+list(old)+list(rules)))
+                self.save()
+                try:
+                    self.controller.request('PUT','/configs',{'payload':previous})
+                    for name,choice in selected.items():
+                        self.controller.request('PUT','/proxies/'+urllib.parse.quote(name,safe=''),{'name':choice})
+                except Exception:
+                    pass
+            if isinstance(error,ControllerError):
+                raise ValueError(f'代理配置未被内核接受（HTTP {error.status}），请检查客户端规则') from None
+            if isinstance(error,ValueError):
                 raise
-        except ControllerError as error:
-            raise ValueError(f'代理配置未被内核接受（HTTP {error.status}），请检查客户端规则') from None
-        except ValueError:
-            raise
-        except Exception:
             raise ValueError('代理分流应用未完成，请检查客户端连接后重试') from None
 
     @staticmethod
-    def system_proxy(values=None):
+    def system_proxy():
         import winreg
         path = r'Software\Microsoft\Windows\CurrentVersion\Internet Settings'
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_READ | (winreg.KEY_SET_VALUE if values else 0)) as key:
-            if values:
-                for name, value in values.items():
-                    winreg.SetValueEx(key, name, 0, winreg.REG_DWORD if isinstance(value, int) else winreg.REG_SZ, value)
-                ctypes.windll.wininet.InternetSetOptionW(None, 39, None, 0)
-                ctypes.windll.wininet.InternetSetOptionW(None, 37, None, 0)
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_READ) as key:
             result = {}
             for name, default in [('ProxyEnable',0),('ProxyServer','')]:
                 try:
@@ -502,112 +554,161 @@ class ProxyProtection:
         # Force the existing physical WiFi adapter path to avoid circular TUN checks.
         return network.opener.try_wifi_path() and network.online()
 
-    def _client_flags(self, enable=None, expected=None):
+    def _client_flags(self):
+        """Read persisted client switches for settled-state verification, never write them."""
         if self.client=='flclash':
-            path = self.controller.root / 'shared_preferences.json'
-            original = path.read_bytes()
-            document = json.loads(original.decode('utf-8-sig'))
-            key = 'flutter.config' if 'flutter.config' in document else 'config'
-            config = json.loads(document[key]) if isinstance(document[key],str) else document[key]
-            flags = {'enable_system_proxy':str(bool(config.get('networkProps',{}).get('systemProxy',True))).lower(),
-                     'enable_tun_mode':str(bool(config.get('patchClashConfig',{}).get('tun',{}).get('enable',False))).lower()}
-            if expected is not None and flags!=expected:
-                raise ValueError('代理客户端设置已变化，请在客户端中恢复')
-            if enable:
-                config.setdefault('networkProps',{})['systemProxy']=enable['enable_system_proxy']=='true'
-                config.setdefault('patchClashConfig',{}).setdefault('tun',{})['enable']=enable['enable_tun_mode']=='true'
-                document[key]=json.dumps(config,ensure_ascii=False) if isinstance(document[key],str) else config
-                if path.read_bytes()!=original:
-                    raise ValueError('客户端设置正在保存，请稍后重试')
-                atomic_write(path,json.dumps(document,ensure_ascii=False).encode())
-            return flags
-        path = self.controller.root / 'verge.yaml'
-        text = path.read_text('utf-8-sig')
-        flags = {key:scalar(text,key) for key in ('enable_system_proxy','enable_tun_mode')}
-        if expected is not None and any(flags[k] != expected[k] for k in flags):
-            raise ValueError('代理客户端设置已变化，请在客户端中恢复')
-        if enable:
-            for key, value in enable.items():
-                text = root_value(text, key, value)
-            atomic_write(path, text.encode('utf-8'))
-        return flags
+            document = json.loads((self.controller.root/'shared_preferences.json').read_text('utf-8-sig'))
+            config = document.get('flutter.config',document.get('config',{}))
+            if isinstance(config,str):
+                config=json.loads(config)
+            return {'proxy':bool(config.get('networkProps',{}).get('systemProxy',True)),
+                    'tun':bool(config.get('patchClashConfig',{}).get('tun',{}).get('enable',False))}
+        text=(self.controller.root/'verge.yaml').read_text('utf-8-sig')
+        flags={name:scalar(text,key) for name,key in [('proxy','enable_system_proxy'),('tun','enable_tun_mode')]}
+        if any(value not in ('true','false') for value in flags.values()):
+            raise OSError('客户端开关状态待确认')
+        return {key:value=='true' for key,value in flags.items()}
+
+    @staticmethod
+    def _owns_proxy(proxy, port):
+        return proxy.get('ProxyEnable')==1 and bool(port) and bool(proxy.get('ProxyServer')) and all(
+            re.fullmatch(r'(?:https?=|socks=)?(?:127\.0\.0\.1|localhost):'+str(port), part.strip())
+            for part in proxy['ProxyServer'].split(';'))
+
+    def _verify_switch(self, field, desired, snapshot, *, wait=True):
+        until=time.monotonic()+(5 if wait else 0)
+        stable=0
+        while True:
+            flags=self._client_flags()
+            config=self.controller.request('GET','/configs')
+            system=self.system_proxy()
+            actual=bool(config.get('tun',{}).get('enable')) if field=='tun' else system['ProxyEnable']==1
+            matches=flags[field]==desired and actual==desired
+            if field=='proxy' and desired:
+                matches=matches and self._owns_proxy(system,snapshot['port'])
+            stable=stable+1 if matches else 0
+            if stable >= (2 if wait else 1):
+                return True
+            if time.monotonic()>=until:
+                raise OSError('客户端开关与实际网络状态尚未一致')
+            time.sleep(.2)
+
+    def _snapshot(self):
+        path=self.recovery_path
+        saved=json.loads(path.read_text('utf-8'))
+        if saved.get('schema')!=2:
+            flags=saved.get('flags',{})
+            if not all(flags.get(k) in ('true','false') for k in ('enable_system_proxy','enable_tun_mode')):
+                raise ValueError('旧版恢复记录请在代理客户端中核对并恢复')
+            fields=[key for key,active in [('tun',saved.get('tun')),('proxy',saved.get('owns_proxy'))] if active]
+            completed=[key for key in fields if saved.get(key+'_disabled')]
+            saved={'schema':2,'original':{'proxy':flags['enable_system_proxy']=='true','tun':flags['enable_tun_mode']=='true'},
+                   'port':int(self.controller.request('GET','/configs').get('mixed-port',0)),
+                   'fields':fields,'completed':completed,'attempted':completed.copy(),
+                   'restored':[],'restore_attempted':[],'restoring':False,'other_proxy':False}
+            atomic_write(path,json.dumps(saved).encode())
+        return saved
 
     def fail_open(self):
-        """Resume partial work after a controller outage; keep the original snapshot."""
+        """Use the GUI's own switch handlers, then verify GUI, saved and OS/core states."""
         if self.demo:
             raise ValueError('演示模式不切换系统网络')
-        record_path = self.recovery_path
-        if record_path.exists():
-            snapshot = json.loads(record_path.read_text('utf-8'))
+        path=self.recovery_path
+        if path.exists():
+            saved=self._snapshot()
         else:
-            try:
-                config = self.controller.request('GET', '/configs')
-            except Exception:
-                runtime = self.controller.runtime()
-                tun_block = re.search(r'^tun:[^\n]*\n((?:[ \t]+[^\n]*\n?)*)', runtime, re.M)
-                config = {'mixed-port':scalar(runtime, 'mixed-port', '0'),
-                          'tun':{'enable':bool(tun_block and re.search(r'^\s+enable:\s*true\s*$', tun_block[1], re.M))}}
-            proxy = self.system_proxy()
-            port = int(config.get('mixed-port', 0))
-            owns_proxy = proxy['ProxyEnable'] == 1 and bool(port) and all(
-                re.fullmatch(r'(?:https?=|socks=)?(?:127\.0\.0\.1|localhost):' + str(port), part)
-                for part in proxy['ProxyServer'].split(';'))
-            tun = bool(config.get('tun', {}).get('enable'))
-            if not owns_proxy and not tun:
+            gui=self.switches.read()
+            config=self.controller.request('GET','/configs')
+            system=self.system_proxy()
+            port=int(config.get('mixed-port',0))
+            other_proxy=system['ProxyEnable']==1 and not self._owns_proxy(system,port)
+            fields=[key for key in ('tun','proxy') if gui[key] and (key!='proxy' or not other_proxy)]
+            if not fields:
+                if bool(config.get('tun',{}).get('enable')):
+                    raise OSError('客户端与内核开关不一致，请在客户端核对')
                 return False
-            flags = self._client_flags()
-            snapshot = {'proxy':proxy, 'owns_proxy':owns_proxy, 'tun':tun, 'flags':flags, 'proxy_disabled':False, 'tun_disabled':False}
-            atomic_write(record_path, json.dumps(snapshot).encode())
-        errors = []
-        try:
-            if snapshot['tun'] and not snapshot['tun_disabled']:
-                try:
-                    self.controller.request('PATCH', '/configs', {'tun':{'enable':False}})
-                    snapshot['tun_disabled'] = True
-                except Exception:
-                    errors.append('tun')
-            if snapshot['owns_proxy'] and not snapshot['proxy_disabled']:
-                current = self.system_proxy()
-                if current != snapshot['proxy']:
-                    raise ValueError('系统代理设置已变化，请在客户端中检查')
-                self.system_proxy({'ProxyEnable':0})
-                snapshot['proxy_disabled'] = True
-            # Persistence only changes the switches that actually completed.
-            self._client_flags({'enable_tun_mode':'false' if snapshot['tun_disabled'] else snapshot['flags']['enable_tun_mode'],
-                               'enable_system_proxy':'false' if snapshot['proxy_disabled'] else snapshot['flags']['enable_system_proxy']})
-        finally:
-            atomic_write(record_path, json.dumps(snapshot).encode())
+            saved={'schema':2,'original':gui,'fields':fields,'port':port,'completed':[],
+                   'attempted':[],'restored':[],'restore_attempted':[],'restoring':False,'other_proxy':other_proxy}
+            atomic_write(path,json.dumps(saved).encode())
+        if saved.get('restoring'):
+            raise ValueError('代理恢复尚未完成，请点击恢复代理')
+        errors=[]
+        for field in saved['fields']:
+            try:
+                if field in saved['completed']:
+                    self._verify_switch(field,False,saved,wait=False)
+                    continue
+                current=self.switches.read()[field]
+                if current:
+                    if field in saved['attempted']:
+                        raise OSError('客户端开关发生变化，请手动核对')
+                    if field=='proxy':
+                        system=self.system_proxy()
+                        if system['ProxyEnable']==1 and not self._owns_proxy(system,saved['port']):
+                            raise OSError('系统代理已由其他客户端接管')
+                    saved['attempted'].append(field)
+                    atomic_write(path,json.dumps(saved).encode())
+                    self.switches.set(field,True,False)
+                self._verify_switch(field,False,saved)
+                saved['completed'].append(field)
+            except Exception:
+                errors.append(field)
+            finally:
+                atomic_write(path,json.dumps(saved).encode())
         if errors:
-            raise OSError('TUN controller unavailable')
+            raise OSError('客户端关闭尚未确认：'+', '.join(errors))
         return True
 
     def restore(self):
         with self.lock:
             if self.demo:
                 raise ValueError('演示模式不切换系统网络')
-            path = self.recovery_path
+            path=self.recovery_path
             if not path.exists():
                 raise ValueError('没有待恢复的代理设置')
+            saved=self._snapshot()
             try:
-                saved = json.loads(path.read_text('utf-8'))
-                flags = self._client_flags()
-                expected = {'enable_system_proxy':'false' if saved['proxy_disabled'] else saved['flags']['enable_system_proxy'], 'enable_tun_mode':'false' if saved['tun_disabled'] else saved['flags']['enable_tun_mode']}
-                if flags != expected:
-                    raise ValueError('代理客户端设置已变化，请在客户端中恢复')
-                current = self.system_proxy()
-                if saved['proxy_disabled'] and (current['ProxyEnable'] != 0 or current['ProxyServer'] != saved['proxy']['ProxyServer']):
-                    raise ValueError('系统代理设置已变化，请在代理客户端中恢复')
-                if saved['tun_disabled']:
-                    self.controller.request('PATCH', '/configs', {'tun':{'enable':saved['tun']}})
-                if saved['proxy_disabled']:
-                    self.system_proxy(saved['proxy'])
-                self._client_flags(saved['flags'])
+                # Reconcile a switch whose GUI call completed before a timeout/crash.
+                gui=self.switches.read()
+                for field in saved.get('restore_attempted',[]):
+                    if field not in saved['restored'] and gui[field]==saved['original'][field]:
+                        self._verify_switch(field,saved['original'][field],saved,wait=False)
+                        saved['restored'].append(field)
+                for field in saved['attempted']:
+                    if field not in saved['completed'] and not gui[field]:
+                        self._verify_switch(field,False,saved,wait=False)
+                        saved['completed'].append(field)
+                for field in saved['completed']:
+                    # An explicit restore can acknowledge that the user already restored it.
+                    if field not in saved['restored'] and gui[field]==saved['original'][field]:
+                        self._verify_switch(field,saved['original'][field],saved,wait=False)
+                        saved['restored'].append(field)
+                    desired=field in saved['restored']
+                    if gui[field]!=desired:
+                        raise ValueError('客户端开关已变化，请在客户端中恢复')
+                    self._verify_switch(field,desired,saved,wait=False)
+                if 'proxy' in saved['completed'] and 'proxy' not in saved['restored']:
+                    system=self.system_proxy()
+                    if system['ProxyEnable']!=0:
+                        raise ValueError('系统代理已变化，请在客户端中恢复')
+                saved['restoring']=True
+                atomic_write(path,json.dumps(saved).encode())
+                for field in reversed(saved['completed']):
+                    if field in saved['restored']:
+                        continue
+                    if field not in saved.setdefault('restore_attempted',[]):
+                        saved['restore_attempted'].append(field)
+                        atomic_write(path,json.dumps(saved).encode())
+                    self.switches.set(field,False,saved['original'][field])
+                    self._verify_switch(field,saved['original'][field],saved)
+                    saved['restored'].append(field)
+                    atomic_write(path,json.dumps(saved).encode())
                 path.unlink()
-                self.failures = 0; self.state = 'restored'; self.message = '已恢复代理设置'
+                self.failures=0; self.state='restored'; self.message='客户端已恢复代理设置'
             except ValueError:
                 raise
             except Exception:
-                raise ValueError('代理设置尚未恢复，请启动代理客户端后重试') from None
+                raise ValueError('客户端恢复尚未确认，请保持客户端运行后重试') from None
 
     def tick(self, cancel, event, allowed=lambda: True, *, required_failures=3, switch_allowed=lambda: True):
         notice = None
@@ -618,10 +719,13 @@ class ProxyProtection:
             try:
                 record = self.recovery_path
                 if record.exists():
-                    saved = json.loads(record.read_text('utf-8'))
-                    complete = (not saved['tun'] or saved['tun_disabled']) and (not saved['owns_proxy'] or saved['proxy_disabled'])
-                    if complete:
-                        self.state = 'direct'; self.message = '已切换直连，等待手动恢复'; return
+                    saved=self._snapshot()
+                    if saved.get('restoring'):
+                        self.state='error'; self.message='客户端恢复尚未完成，请点击恢复代理'; return
+                    if set(saved['completed'])==set(saved['fields']):
+                        for field in saved['fields']:
+                            self._verify_switch(field,False,saved,wait=False)
+                        self.state='direct'; self.message='客户端已关闭代理，等待手动恢复'; return
                 else:
                     previous_exit = self.egress
                     healthy = self.proxy_healthy()
@@ -649,14 +753,15 @@ class ProxyProtection:
                     if confirmed_leaf is None or self.egress != sampled_exit:
                         self.failures = 0; self.state = 'uncertain'; self.message = '出口已切换，等待重新检测'; return
                 if self.fail_open():
-                    self.state = 'direct'; self.message = '代理故障，已切换全机直连'
-                    notice = ('info', '代理出口异常，已关闭系统代理和 TUN，等待手动恢复')
+                    self.state = 'direct'; self.message = '客户端已关闭代理，状态已核验'
+                    saved=self._snapshot()
+                    notice = ('info', '代理出口异常，客户端已关闭 '+ '、'.join('TUN' if k=='tun' else '系统代理' for k in saved['fields']) + '，已核验；等待手动恢复')
                 else:
                     self.state = 'idle'; self.message = '未检测到本客户端的系统代理或 TUN'
             except Exception:
                 if self.state != 'error' and self.failures >= required_failures:
                     notice = ('error', '代理切换未完成，请在代理客户端中检查 TUN 和系统代理')
-                self.state = 'error'; self.message = '代理保护操作未完成，请检查客户端'
+                self.state = 'error'; self.message = '客户端开关尚未确认，请检查客户端窗口、权限或手动恢复'
         # Do not hold the routing lock while the service persists a log record.
         if notice:
             event(*notice)
@@ -671,13 +776,14 @@ class ProxyProtection:
             self.save()
 
     def ensure_rules(self, paths):
-        """FlClash regenerates config.yaml on profile reload; restore only our rules."""
-        if self.demo or self.client!='flclash' or not self.policies or self.recovery_path.exists():
+        """Reapply through the external API when either client reloads a profile."""
+        if self.demo or not (self.policies or self.managed_rules) or self.recovery_path.exists():
             return
         with self.lock:
             wanted = self.rules(paths)
             live = self.controller.request('GET','/rules').get('rules',[])
             expected = [(rule.split(',',2)[1],rule.split(',',2)[2]) for rule in wanted]
             present = [(row.get('payload'),row.get('proxy')) for row in live if row.get('type')=='ProcessPath']
-            if present[:len(expected)]!=expected:
+            stale={(r.split(',',2)[1],r.split(',',2)[2]) for r in self.managed_rules} - set(expected)
+            if present[:len(expected)]!=expected or stale.intersection(present):
                 self._apply(wanted,wanted)

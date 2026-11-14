@@ -33,24 +33,44 @@ class ProxyTests(unittest.TestCase):
                 return {'proxies':{'Sample':{'type':'Selector'},'DIRECT':{'type':'Direct'},'GLOBAL':{'type':'Selector'}}}
             return {'delay':12}
         self.controller.request.side_effect = request
-        self.proxy = ProxyProtection(self.root, controller=self.controller)
+        self.switches=Mock()
+        self.proxy = ProxyProtection(self.root, controller=self.controller, switches=self.switches)
         self.exe = self.root / 'sample.exe'
         self.exe.write_bytes(b'fixture')
         self.identifier = ApplicationGuards.identifier(self.exe)
         self.registry = {'ProxyEnable':1, 'ProxyServer':'127.0.0.1:7897'}
-        def registry(values=None):
-            if values:
-                self.registry.update(values)
-            return self.registry.copy()
-        self.proxy.system_proxy = Mock(side_effect=registry)
+        self.proxy.system_proxy = Mock(side_effect=lambda:self.registry.copy())
+        self.gui={'proxy':True,'tun':True}
+        self.switches.read.side_effect=lambda:self.gui.copy()
+        def set_switch(field,expected,desired):
+            self.assertEqual(self.gui[field],expected)
+            self.gui[field]=desired
+            if field=='proxy': self.registry['ProxyEnable']=int(desired)
+            else: self.config['tun']['enable']=desired
+            self.write_client_flags()
+            return self.gui.copy()
+        self.switches.set.side_effect=set_switch
+
+    def write_client_flags(self):
+        # This simulates the CLIENT saving after its own switch handler, not app writes.
+        if self.proxy.client=='flclash':
+            path=self.controller.root/'shared_preferences.json'
+            raw=json.loads(path.read_text())
+            config=json.loads(raw['flutter.config'])
+            config['networkProps']['systemProxy']=self.gui['proxy']
+            config['patchClashConfig']['tun']['enable']=self.gui['tun']
+            raw['flutter.config']=json.dumps(config)
+            path.write_text(json.dumps(raw))
+        else:
+            (self.controller.root/'verge.yaml').write_text('enable_system_proxy: '+str(self.gui['proxy']).lower()+'\nenable_tun_mode: '+str(self.gui['tun']).lower()+'\nother: unchanged\n')
 
     def test_policy_apply_preserves_custom_rules_and_original_script(self):
         self.proxy.configure([self.exe], identifier=self.identifier, mode='direct')
         payload = next(call[2]['payload'] for call in self.calls if call[0] == 'PUT')
         self.assertIn('DOMAIN,existing.test,REJECT', payload)
         self.assertLess(payload.index('PROCESS-PATH'),payload.index('DOMAIN,existing.test'))
-        self.assertEqual((self.root/'proxy-script-original.js').read_text(), self.original)
-        self.assertIn('schoolWifiOriginalMain.apply', (self.controller.root/'profiles/Script.js').read_text())
+        self.assertFalse((self.root/'proxy-script-original.js').exists())
+        self.assertEqual((self.controller.root/'profiles/Script.js').read_text(),self.original)
         reopened = ProxyProtection(self.root, controller=self.controller)
         self.assertEqual(reopened.policies[self.identifier], 'direct')
         self.assertNotIn('secret', self.proxy.path.read_text())
@@ -157,6 +177,7 @@ class ProxyTests(unittest.TestCase):
         self.exit_fixture()
         self.proxy.direct_healthy=Mock(return_value=True)
         self.proxy.fail_open=Mock(return_value=True)
+        self.proxy._snapshot=Mock(return_value={'fields':['tun','proxy']})
         self.proxy.tick(threading.Event(),Mock(),required_failures=1)
         self.proxy.fail_open.assert_called_once()
         self.assertEqual(self.proxy.state,'direct')
@@ -222,6 +243,7 @@ class ProxyTests(unittest.TestCase):
         self.proxy.proxy_healthy = Mock(return_value=False)
         self.proxy.direct_healthy = Mock(return_value=True)
         self.proxy.fail_open = Mock(return_value=True)
+        self.proxy._snapshot=Mock(return_value={'fields':['tun','proxy']})
         event = Mock()
         for _ in range(2):
             self.proxy.tick(threading.Event(),event)
@@ -245,37 +267,37 @@ class ProxyTests(unittest.TestCase):
     def test_fail_open_persists_snapshot_and_manual_restore_roundtrips(self):
         self.assertTrue(self.proxy.fail_open())
         self.assertEqual(self.registry['ProxyEnable'],0)
-        self.assertIn(('PATCH','/configs',{'tun':{'enable':False}}),self.calls)
+        self.assertIn(('tun',True,False),[tuple(c.args) for c in self.switches.set.call_args_list])
+        self.assertFalse(any(c[0]=='PATCH' for c in self.calls))
         self.assertIn('enable_tun_mode: false',(self.controller.root/'verge.yaml').read_text())
-        self.assertNotIn('proxy', json.dumps(self.proxy.status()).lower().replace('restore_available',''))
+        self.assertNotIn('ProxyServer',json.dumps(self.proxy.status()))
         self.proxy.restore()
         self.assertEqual(self.registry['ProxyEnable'],1)
         self.assertFalse((self.root/'proxy-recovery.json').exists())
-        self.assertIn(('PATCH','/configs',{'tun':{'enable':True}}),self.calls)
+        self.assertIn(('tun',False,True),[tuple(c.args) for c in self.switches.set.call_args_list])
         self.assertIn('other: unchanged',(self.controller.root/'verge.yaml').read_text())
 
     def test_other_clients_system_proxy_is_preserved(self):
         self.registry['ProxyServer']='127.0.0.1:9999'
         self.proxy.fail_open()
         self.assertEqual(self.registry['ProxyEnable'],1)
-        self.proxy.system_proxy.assert_called_once_with()
+        self.assertFalse(any(c.args[0]=='proxy' for c in self.switches.set.call_args_list))
 
-    def test_controller_failure_disables_only_owned_proxy_and_retries_tun(self):
-        original = self.controller.request.side_effect
-        def request(method,path,payload=None):
-            if method == 'PATCH':
-                raise OSError('offline')
-            return original(method,path,payload)
-        self.controller.request.side_effect=request
-        with self.assertRaises(OSError):
-            self.proxy.fail_open()
+    def test_client_failure_records_partial_shutdown_without_retrying_unknown_toggle(self):
+        original=self.switches.set.side_effect
+        def switch(field,expected,desired):
+            if field=='tun':raise OSError('fixture GUI denied')
+            return original(field,expected,desired)
+        self.switches.set.side_effect=switch
+        with self.assertRaises(OSError): self.proxy.fail_open()
         self.assertEqual(self.registry['ProxyEnable'],0)
-        saved = json.loads((self.root/'proxy-recovery.json').read_text())
-        self.assertFalse(saved['tun_disabled'])
-        self.controller.request.side_effect = original
-        self.assertTrue(self.proxy.fail_open())
+        saved=json.loads(self.proxy.recovery_path.read_text())
+        self.assertEqual(saved['completed'],['proxy'])
+        self.switches.set.side_effect=original
+        with self.assertRaises(OSError): self.proxy.fail_open()
         self.proxy.restore()
         self.assertEqual(self.registry['ProxyEnable'],1)
+        self.assertTrue(self.gui['tun'])
 
     def test_restore_does_not_overwrite_a_new_system_proxy(self):
         self.proxy.fail_open()
@@ -332,13 +354,14 @@ class ProxyTests(unittest.TestCase):
         self.assertEqual(json.loads(restored['flutter.config']),json.loads(original['flutter.config']))
         self.assertEqual(restored['flutter.version'],original['flutter.version'])
 
-    def test_flclash_rules_write_runtime_and_reapply_after_client_regeneration(self):
+    def test_flclash_rules_apply_via_api_and_reapply_without_client_file_writes(self):
         self.prepare_flclash()
         script_before=(self.controller.root/'profiles/Script.js').read_bytes()
         self.proxy.configure([self.exe],identifier=self.identifier,mode='direct')
-        self.assertIn('PROCESS-PATH',self.controller.runtime_path.read_text())
+        self.assertEqual(self.controller.runtime_path.read_text(),self.runtime)
+        self.assertTrue(any(c[0]=='PUT' and c[1]=='/configs' and 'PROCESS-PATH' in c[2]['payload'] for c in self.calls))
         self.assertEqual((self.controller.root/'profiles/Script.js').read_bytes(),script_before)
-        self.assertTrue((self.root/'proxy-flclash-original.yaml').exists())
+        self.assertFalse((self.root/'proxy-flclash-original.yaml').exists())
         self.controller.runtime_path.write_text(self.runtime)
         original=self.controller.request.side_effect
         def request(method,path,payload=None):
@@ -347,7 +370,8 @@ class ProxyTests(unittest.TestCase):
             return original(method,path,payload)
         self.controller.request.side_effect=request
         self.proxy.ensure_rules([self.exe])
-        self.assertIn('PROCESS-PATH',self.controller.runtime_path.read_text())
+        self.assertEqual(self.controller.runtime_path.read_text(),self.runtime)
+        self.assertTrue(any(c[0]=='PUT' and c[1]=='/configs' and 'PROCESS-PATH' in c[2]['payload'] for c in self.calls))
 
     def test_rule_reload_preserves_live_tun_and_selected_node(self):
         self.prepare_flclash()
@@ -362,6 +386,161 @@ class ProxyTests(unittest.TestCase):
         payload=next(call[2]['payload'] for call in self.calls if call[0]=='PUT' and call[1]=='/configs')
         self.assertIn('tun: {"enable": false}',payload)
         self.assertIn(('PUT','/proxies/Sample',{'name':'chosen'}),self.calls)
+
+
+    def test_settled_state_failure_never_reports_success(self):
+        self.proxy._verify_switch=Mock(side_effect=OSError('fixture: core did not settle'))
+        with self.assertRaises(OSError): self.proxy.fail_open()
+        saved=json.loads(self.proxy.recovery_path.read_text())
+        self.assertEqual(saved['completed'],[])
+        self.assertEqual(saved['attempted'],['tun','proxy'])
+        self.assertEqual(len(self.switches.set.call_args_list),2)
+
+    def test_selector_failure_rolls_back_live_rules_and_keeps_cleanup_history(self):
+        original = self.controller.request.side_effect
+        before = (self.controller.root/'verge.yaml').read_bytes()
+        selected_calls = []
+        def request(method,path,payload=None):
+            if path == '/proxies':
+                return {'proxies':{'Sample':{'type':'Selector','all':['chosen'],'now':'chosen'}}}
+            if method == 'PUT' and path == '/proxies/Sample':
+                selected_calls.append(payload)
+                if len(selected_calls) == 1:
+                    raise OSError('fixture: selector restore failed after config accepted')
+                return {}
+            return original(method,path,payload)
+        self.controller.request.side_effect = request
+        with self.assertRaises(ValueError):
+            self.proxy.configure([self.exe],identifier=self.identifier,mode='direct')
+        payloads = [c[2]['payload'] for c in self.calls if c[0]=='PUT' and c[1]=='/configs']
+        self.assertEqual(len(payloads),2)
+        self.assertIn('PROCESS-PATH,',payloads[0])
+        self.assertNotIn('PROCESS-PATH,',payloads[1])
+        self.assertIn('DOMAIN,existing.test,REJECT',payloads[1])
+        self.assertEqual(len(selected_calls),2)
+        self.assertEqual(self.proxy.policies,{})
+        reopened = ProxyProtection(self.root,controller=self.controller,switches=self.switches)
+        self.assertTrue(reopened.managed_rules)
+        self.assertEqual(reopened.policies,{})
+        self.assertEqual((self.controller.root/'verge.yaml').read_bytes(),before)
+        self.switches.set.assert_not_called()
+
+    def test_partial_shutdown_can_reconcile_a_completed_gui_call(self):
+        real=self.switches.set.side_effect
+        def lose_reply(field,expected,desired):
+            result=real(field,expected,desired)
+            if field=='tun':raise TimeoutError('fixture: reply lost after client action')
+            return result
+        self.switches.set.side_effect=lose_reply
+        with self.assertRaises(OSError):self.proxy.fail_open()
+        self.assertFalse(self.gui['tun'])
+        self.switches.set.side_effect=real
+        self.assertTrue(self.proxy.fail_open())
+        self.assertEqual([c.args[0] for c in self.switches.set.call_args_list].count('tun'),1)
+        self.proxy.restore()
+        self.assertEqual(self.gui,{'proxy':True,'tun':True})
+
+    def test_manual_reenable_is_never_toggled_off_again(self):
+        self.proxy.fail_open()
+        self.gui['tun']=True;self.config['tun']['enable']=True;self.write_client_flags()
+        self.switches.set.reset_mock()
+        with self.assertRaises(OSError):self.proxy.fail_open()
+        self.switches.set.assert_not_called()
+        self.proxy.tick(threading.Event(),Mock())
+        self.assertEqual(self.proxy.state,'error')
+        self.switches.set.assert_not_called()
+
+    def test_restore_resumes_after_client_action_and_lost_reply(self):
+        self.proxy.fail_open()
+        real=self.switches.set.side_effect
+        def lose_reply(field,expected,desired):
+            result=real(field,expected,desired)
+            if field=='proxy':raise TimeoutError('fixture: restored but reply lost')
+            return result
+        self.switches.set.side_effect=lose_reply
+        with self.assertRaises(ValueError):self.proxy.restore()
+        self.assertTrue(self.proxy.recovery_path.exists())
+        self.switches.set.side_effect=real
+        self.proxy.restore()
+        self.assertEqual(self.gui,{'proxy':True,'tun':True})
+        self.assertFalse(self.proxy.recovery_path.exists())
+
+    def test_client_unavailable_never_falls_back_to_registry_or_core_patch(self):
+        self.switches.read.side_effect=OSError('fixture: hidden client unavailable')
+        with self.assertRaises(OSError):self.proxy.fail_open()
+        self.assertEqual(self.registry['ProxyEnable'],1)
+        self.assertFalse(any(c[0]=='PATCH' for c in self.calls))
+        self.assertFalse(self.proxy.recovery_path.exists())
+
+    def test_injected_controller_without_switches_never_uses_real_gui(self):
+        subject=ProxyProtection(self.root,controller=self.controller)
+        with patch('njust_wifi.client_control.subprocess.run') as run:
+            with self.assertRaises(AttributeError):subject.fail_open()
+            run.assert_not_called()
+
+    def test_legacy_recovery_requires_explicit_client_review(self):
+        self.proxy.recovery_path.write_text(json.dumps({'tun':True,'tun_disabled':True}))
+        with self.assertRaises(ValueError):self.proxy.restore()
+        self.switches.set.assert_not_called()
+        self.assertTrue(self.proxy.recovery_path.exists())
+
+    def test_legacy_snapshot_restores_using_only_client_switches(self):
+        self.gui={'proxy':False,'tun':False};self.registry['ProxyEnable']=0;self.config['tun']['enable']=False;self.write_client_flags()
+        self.proxy.recovery_path.write_text(json.dumps({'flags':{'enable_system_proxy':'true','enable_tun_mode':'true'},'tun':True,'owns_proxy':True,'tun_disabled':True,'proxy_disabled':True}))
+        self.proxy.restore()
+        self.assertEqual(self.gui,{'proxy':True,'tun':True})
+        self.assertFalse(any(c[0]=='PATCH' for c in self.calls))
+
+    def test_explicit_restore_acknowledges_users_own_completed_restore(self):
+        self.proxy.fail_open()
+        self.gui={'proxy':True,'tun':True};self.registry['ProxyEnable']=1;self.config['tun']['enable']=True;self.write_client_flags()
+        self.switches.set.reset_mock()
+        self.proxy.restore()
+        self.switches.set.assert_not_called()
+        self.assertFalse(self.proxy.recovery_path.exists())
+
+    def test_client_settings_are_never_written_by_app_during_routing(self):
+        original=(self.controller.root/'verge.yaml').read_bytes()
+        self.proxy.configure([self.exe],identifier=self.identifier,mode='direct')
+        self.assertEqual((self.controller.root/'verge.yaml').read_bytes(),original)
+        self.assertEqual((self.controller.root/'profiles/Script.js').read_text(),self.original)
+        self.proxy.remove([self.exe],{self.identifier})
+        self.assertTrue(self.proxy.managed_rules)
+        self.assertEqual((self.controller.root/'profiles/Script.js').read_text(),self.original)
+
+    def test_verge_reloads_reapply_removed_managed_rules_through_api(self):
+        self.proxy.configure([self.exe],identifier=self.identifier,mode='direct')
+        rule=self.proxy.rules([self.exe])[0]
+        self.proxy.remove([self.exe],{self.identifier})
+        original=self.controller.request.side_effect
+        def request(method,path,payload=None):
+            if path=='/rules':return {'rules':[{'type':'ProcessPath','payload':str(self.exe),'proxy':'DIRECT'}]}
+            return original(method,path,payload)
+        self.controller.request.side_effect=request
+        self.calls.clear()
+        self.proxy.ensure_rules([self.exe])
+        self.assertTrue(any(c[0]=='PUT' and c[1]=='/configs' for c in self.calls))
+        reopened=ProxyProtection(self.root,controller=self.controller,switches=self.switches)
+        self.assertIn(rule,reopened.managed_rules)
+
+    def test_controller_settings_separate_clients_and_never_expose_secrets(self):
+        self.proxy.configure_controller({'client':'clash-verge','url':'http://localhost:9097/','secret':'fixture-private'})
+        self.assertEqual(self.proxy.controller_status(),{'url':'http://127.0.0.1:9097','secret_set':True,'automatic':False})
+        self.assertNotIn('fixture-private',json.dumps(self.proxy.status()))
+        self.proxy.configure_controller({'url':'http://127.0.0.1:9098','secret':''})
+        self.assertEqual(self.proxy.controllers['clash-verge']['secret'],'fixture-private')
+        self.proxy.set_client('flclash')
+        self.assertFalse(self.proxy.controller_status()['secret_set'])
+        with self.assertRaises(ValueError):self.proxy.configure_controller({'client':'clash-verge','url':'http://127.0.0.1:9090','secret':'wrong'})
+        self.proxy.set_client('clash-verge')
+        self.proxy.configure_controller({'url':'','clear_secret':True})
+        self.assertEqual(self.proxy.controller_status(),{'url':'','secret_set':False,'automatic':True})
+
+    def test_controller_rejects_nonlocal_urls_and_header_injection_before_saving(self):
+        for url in ['https://127.0.0.1:9090','http://example.invalid:9090','http://0.0.0.0:9090','http://user@127.0.0.1:9090','http://127.0.0.1:9090/path','http://127.0.0.1:9090?q=1','http://127.0.0.1:99999']:
+            with self.subTest(url=url),self.assertRaises(ValueError):self.proxy.configure_controller({'url':url})
+        with self.assertRaises(ValueError):self.proxy.configure_controller({'url':'','secret':'bad\r\nheader'})
+        self.assertFalse(self.proxy.controllers_path.exists())
 
 
 class HttpControllerTests(unittest.TestCase):
@@ -383,6 +562,9 @@ class HttpControllerTests(unittest.TestCase):
                 with patch.dict('os.environ',{'HTTP_PROXY':'http://127.0.0.1:1'}):
                     result=Controller(root,kind='flclash').request('GET','/version')
                 self.assertEqual(result['version'],'fixture')
+                manual=Controller(root/'missing',kind='clash-verge',options={'url':f'http://127.0.0.1:{server.server_port}','secret':'fixture-token'})
+                with patch.dict('os.environ',{'HTTP_PROXY':'http://127.0.0.1:1'}):
+                    self.assertEqual(manual.request('GET','/version')['version'],'fixture')
                 # UI controller settings may be newer than its generated YAML.
                 (root/'config.yaml').write_text('external-controller: ""\nsecret: old-token\n')
                 (root/'shared_preferences.json').write_text(json.dumps({'flutter.config':json.dumps({'patchClashConfig':{'external-controller':f'127.0.0.1:{server.server_port}','secret':'fixture-token'}})}))

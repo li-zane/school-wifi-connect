@@ -1793,7 +1793,7 @@ async function initApp() {
       fallbacks: () => { syncFallbackNetworksFromDOM(); return currentFallbackNetworks.filter(n => n.ssid.trim() || n.password).map(n => ({ssid:n.ssid.trim(), password:n.password})); },
       onSaved: () => { hasSavedCredentials = Boolean(dom.cfgUsername.value && dom.cfgPassword.value); }});
     initWindow({apiRequest, showToast, flush: () => autosave.flush()});
-    proxyUI = initProxy({apiRequest, showToast, onClientChanged:loadProbes});
+    proxyUI = initProxy({apiRequest, showToast, onClientChanged:loadProbes, togglePasswordInput});
     initUpdates({apiRequest, showToast});
     if (configLoaded) initOnboarding({switchTab, isConfigured: Boolean(hasSavedCredentials || currentFallbackNetworks.length || isServiceRunning), getRunning: () => isServiceRunning});
   } catch (err) {

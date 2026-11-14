@@ -13,6 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def build(destination: Path):
+    import sys
+    sys.path.insert(0,str(ROOT))
+    from njust_wifi.client_control import build_bridge
+    build_bridge(ROOT / 'scripts/ProxyClient.cs', destination / 'NJUSTWiFiProxyBridge.exe')
     icon = ROOT / 'assets/NJUSTWiFi.ico'
     shutil.copy2(icon, destination / 'NJUSTWiFi.ico')
     cache = ROOT / '.tmp' / 'desktop-sdk'

@@ -7,6 +7,7 @@
   <link rel="icon" href="logo.webp" type="image/webp">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="onboarding.css">
+  <link rel="stylesheet" href="proxy-guide.css">
 </head>
 <body>
   <div id="toast-bar" class="toast-bar hidden" role="status" aria-live="polite" aria-atomic="true" popover="manual"></div>
@@ -376,11 +377,66 @@
         <section id="panel-probes" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-probes" hidden>
           <div class="glass-panel probes-workspace">
             <div class="proxy-card">
-              <div class="section-title-row"><span class="slot-section-title">代理保护</span><span id="proxy-status" class="glass-pill pill-subtle">未启用</span></div>
+              <div class="section-title-row">
+                <span class="slot-section-title">代理保护</span>
+                <div class="proxy-card-head-right">
+                  <button id="proxy-guide-open" type="button" class="btn-glass-action btn-xs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="9"/>
+                      <path d="M9.6 9.3a2.4 2.4 0 0 1 4.6.8c0 1.6-2.2 2-2.2 3.3"/>
+                      <circle cx="12" cy="16.5" r=".7" fill="currentColor" stroke="none"/>
+                    </svg>
+                    <span>配置教程</span>
+                  </button>
+                  <span id="proxy-status" class="glass-pill pill-subtle">未启用</span>
+                </div>
+              </div>
               <div class="proxy-actions"><label class="glass-check-item"><input id="proxy-fail-open" type="checkbox" class="glass-checkbox"><span>代理出口异常时关闭系统代理和 TUN</span></label><button id="proxy-check" type="button" class="btn-glass-action btn-sm">检测出口</button><button id="proxy-restore" type="button" class="btn-glass-action btn-sm" disabled>恢复代理</button></div>
               <div class="proxy-actions"><label for="proxy-client">客户端</label><select id="proxy-client" class="glass-input"><option value="clash-verge">Clash Verge</option><option value="flclash">FlClash</option></select><button id="proxy-detect" type="button" class="btn-glass-action btn-sm">连接客户端</button></div>
               <div class="proxy-actions"><label for="proxy-group">守护代理组</label><select id="proxy-group" class="glass-input"><option value="">未选择</option></select></div>
               <p id="proxy-egress" class="proxy-note">出口随客户端当前选择检测，守护代理组用于程序分流。</p>
+
+              <details id="proxy-controller-details" class="proxy-controller-details">
+                <summary class="proxy-controller-summary">
+                  <span class="proxy-controller-summary-left">
+                    <span class="summary-accent" aria-hidden="true"></span>
+                    <span>外部控制配置</span>
+                  </span>
+                  <span class="proxy-controller-summary-right">
+                    <span id="proxy-controller-mode" class="glass-pill pill-subtle">自动读取</span>
+                    <svg class="summary-chevron" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="6 9 12 15 18 9"/>
+                    </svg>
+                  </span>
+                </summary>
+                <div class="proxy-controller-body">
+                  <div class="proxy-controller-grid">
+                    <div class="field-slot">
+                      <label for="proxy-controller-url" class="slot-label">控制器地址 (URL)</label>
+                      <input id="proxy-controller-url" type="text" class="glass-input" placeholder="留空自动读取（如 http://127.0.0.1:9090）" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div class="field-slot">
+                      <label for="proxy-controller-secret" class="slot-label">访问密钥 (Secret)</label>
+                      <div class="password-input-group">
+                        <input id="proxy-controller-secret" type="password" class="glass-input input-with-toggle" placeholder="留空保持已有 / 自动读取" autocomplete="off" spellcheck="false">
+                        <button id="proxy-controller-secret-toggle" type="button" class="btn-toggle-eye" aria-label="显示访问密钥" aria-pressed="false" title="显示/隐藏访问密钥" data-password-label="访问密钥">
+                          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" class="eye-icon" aria-hidden="true">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="proxy-controller-foot">
+                    <div class="proxy-controller-hints">
+                      <span id="proxy-controller-secret-state" class="glass-pill pill-subtle">未设置手动密钥</span>
+                      <span class="proxy-controller-tip">留空地址自动读取客户端本机配置，失焦自动保存</span>
+                    </div>
+                    <button id="proxy-controller-clear-secret" type="button" class="btn-glass-action btn-xs btn-warn-text" disabled>清除手动密钥</button>
+                  </div>
+                </div>
+              </details>
             </div>
             <div class="probes-toolbar">
               <div class="toolbar-left">
@@ -518,6 +574,72 @@
       <div class="modal-actions-row"><button id="close-cancel" class="btn-glass-action" type="button">取消</button><button id="close-exit" class="btn-glass-action" type="button">退出程序</button><button id="close-tray" class="btn-espresso" type="button">关闭到托盘</button></div>
     </div>
   </dialog>
+
+  <dialog id="modal-proxy-guide" class="glass-modal proxy-guide-modal" aria-labelledby="proxy-guide-title">
+    <div class="glass-modal-card proxy-guide-card">
+      <div class="modal-head">
+        <div class="guide-head-title-wrap">
+          <h3 id="proxy-guide-title" class="modal-title">外部控制配置教程</h3>
+          <span id="proxy-guide-step-badge" class="glass-pill guide-step-badge">步骤 1 / 2</span>
+        </div>
+        <button id="proxy-guide-close" class="modal-close-btn" type="button" aria-label="关闭教程">&times;</button>
+      </div>
+
+      <div class="guide-client-tabs" role="tablist" aria-label="选择代理客户端">
+        <button type="button" class="guide-client-tab" role="tab" data-guide-client="clash-verge" aria-selected="true">Clash Verge</button>
+        <button type="button" class="guide-client-tab" role="tab" data-guide-client="flclash" aria-selected="false" tabindex="-1">FlClash</button>
+      </div>
+
+      <div class="guide-body">
+        <div class="guide-step-stage">
+          <div class="guide-step-head">
+            <h4 id="proxy-guide-step-title" class="guide-step-title"></h4>
+            <div id="proxy-guide-step-path" class="guide-step-path" aria-label="菜单路径"></div>
+          </div>
+          <p id="proxy-guide-step-text" class="guide-step-text"></p>
+          <button id="proxy-guide-shot-btn" type="button" class="guide-shot-btn" aria-label="放大查看截图">
+            <img id="proxy-guide-shot-img" class="guide-shot-img" src="guide/verge-settings.webp" alt="">
+            <span class="guide-shot-zoom-hint" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/>
+                <path d="m20 20-3.5-3.5M11 8v6M8 11h6"/>
+              </svg>
+              <span>点击放大</span>
+            </span>
+          </button>
+        </div>
+        <p class="guide-note-box">说明：出口检测走外部控制，开关交给客户端；请保持客户端运行且权限一致。本软件仅连接本机 127.0.0.1（FlClash 默认 9090 端口），密钥自行设置；后端访问无需 CORS。</p>
+      </div>
+
+      <div class="guide-footer">
+        <div id="proxy-guide-dots" class="guide-dots" aria-hidden="true"></div>
+        <div class="guide-footer-actions">
+          <button id="proxy-guide-prev" type="button" class="btn-glass-action btn-sm">上一页</button>
+          <button id="proxy-guide-next" type="button" class="btn-espresso btn-sm">下一页</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="modal-proxy-guide-zoom" class="glass-modal proxy-guide-zoom-modal" aria-labelledby="proxy-guide-zoom-title">
+    <div class="glass-modal-card proxy-guide-zoom-card">
+      <div class="modal-head">
+        <div class="guide-head-title-wrap">
+          <span id="proxy-guide-zoom-client" class="glass-pill pill-soft">Clash Verge</span>
+          <h3 id="proxy-guide-zoom-title" class="modal-title"></h3>
+        </div>
+        <div class="guide-zoom-head-actions">
+          <button id="proxy-guide-zoom-toggle" type="button" class="btn-glass-action btn-xs" aria-pressed="false">1.5× 细节</button>
+          <button id="proxy-guide-zoom-close" class="modal-close-btn" type="button" aria-label="关闭放大视图">&times;</button>
+        </div>
+      </div>
+      <div id="proxy-guide-zoom-stage" class="guide-zoom-stage">
+        <img id="proxy-guide-zoom-img" class="guide-zoom-img" src="guide/verge-settings.webp" alt="">
+      </div>
+      <p class="guide-zoom-tip">点击图片可切换细节放大，按 Esc 或点击遮罩返回步骤</p>
+    </div>
+  </dialog>
+
   <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -252,6 +252,19 @@ class ApiTests(unittest.TestCase):
             self.assertEqual(self.call("/api/balance/refresh", {})[0], 200)
             refresh.assert_called_once_with()
 
+    def test_proxy_controller_configuration_is_session_protected_and_secret_is_write_only(self):
+        endpoint='/api/proxy/controller'
+        body={'client':'clash-verge','url':'http://127.0.0.1:9097','secret':'fixture-api-secret'}
+        self.assertEqual(self.call(endpoint,body,headers={'X-NJUST-Token':''})[0],403)
+        self.assertEqual(self.call(endpoint,body)[0],200)
+        view=self.call('/api/proxy')[1]['controller']
+        self.assertTrue(view['secret_set'])
+        for path in ('/api/proxy','/api/diagnostics','/api/logs','/api/status','/api/config'):
+            self.assertNotIn('fixture-api-secret',json.dumps(self.call(path)[1]))
+        self.assertEqual(self.call(endpoint,{'client':'flclash','url':''})[0],400)
+        self.assertEqual(self.call(endpoint,{'url':'http://example.invalid:9090'})[0],400)
+        self.assertEqual(self.call('/guide/../proxy-controllers.json')[0],404)
+
     def test_rejects_unknown_fields_and_paths(self):
         self.assertEqual(self.call("/api/config", {"login_url": "http://other.test"})[0], 400)
         self.assertEqual(self.call("/../app.py")[0], 404)

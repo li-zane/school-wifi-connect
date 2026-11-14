@@ -19,6 +19,10 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/updates.js": ("updates.js", "text/javascript; charset=utf-8"),
           "/onboarding.css": ("onboarding.css", "text/css; charset=utf-8"),
           "/logo.webp": ("logo.webp", "image/webp")}
+ASSETS.update({"/proxy-guide.js":("proxy-guide.js","text/javascript; charset=utf-8"),
+               "/proxy-guide.css":("proxy-guide.css","text/css; charset=utf-8")})
+for _image in ('verge-settings','verge-controller','flclash-settings','flclash-controller'):
+    ASSETS['/guide/'+_image+'.webp']=('guide/'+_image+'.webp','image/webp')
 MAX_BODY = 16384
 
 
@@ -182,7 +186,7 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/probes/browse":
                 self.send(200, {"candidates": service.browse()})
                 return
-            elif self.path in ('/api/proxy/policy','/api/proxy/group','/api/proxy/restore','/api/proxy/check','/api/proxy/client'):
+            elif self.path in ('/api/proxy/policy','/api/proxy/group','/api/proxy/restore','/api/proxy/check','/api/proxy/client','/api/proxy/controller'):
                 service.proxy_action(self.path.rsplit('/',1)[1], raw)
             elif self.path in ("/api/probes/add", "/api/probes/remove", "/api/probes/clear", "/api/probes/elevate"):
                 service.probe_action(self.path.rsplit("/", 1)[1], raw)
