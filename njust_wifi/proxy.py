@@ -18,6 +18,14 @@ from .storage import atomic_write
 BEGIN = '// BEGIN SCHOOL-WIFI-CONNECT'
 END = '// END SCHOOL-WIFI-CONNECT'
 MAX_REPLY = 4 * 1024 * 1024
+CLIENTS = {'clash-verge':'Clash Verge', 'flclash':'FlClash'}
+
+
+class ControllerError(OSError):
+    """Keep HTTP status without forwarding a config body containing private data."""
+    def __init__(self, status):
+        self.status = status
+        super().__init__(f'controller HTTP {status}')
 
 
 def scalar(text, key, default=''):
@@ -38,6 +46,15 @@ def root_value(text, key, value):
     line = f'{key}: {value}'
     pattern = r'^' + re.escape(key) + r':[^\r\n]*'
     return re.sub(pattern, lambda _: line, text, count=1, flags=re.M) if re.search(pattern, text, re.M) else line + '\n' + text
+
+
+def root_section(text, key, value):
+    lines = text.splitlines(keepends=True)
+    begin = next((i for i,line in enumerate(lines) if re.match(r'^' + re.escape(key) + r':',line)), len(lines))
+    end = begin + 1
+    while end < len(lines) and not re.match(r'^[A-Za-z_][\w-]*:',lines[end]):
+        end += 1
+    return ''.join(lines[:begin] + [key + ': ' + json.dumps(value,ensure_ascii=False) + '\n'] + lines[end:])
 
 
 def strip_script(script):
@@ -93,7 +110,11 @@ def apply_rules(text, new_rules, old_rules=()):
             value = value[1:-1].replace("''", "'")
         if value not in remove:
             retained.append(line)
-    block = ['rules:\n'] + ['  - ' + json.dumps(rule, ensure_ascii=False) + '\n' for rule in new_rules] + retained
+    # Verge emits indentationless sequences; mixing a new indented item with
+    # existing unindented items makes the entire config invalid YAML.
+    first = next((re.match(r'^(\s*)-\s', line) for line in retained if re.match(r'^\s*-\s', line)), None)
+    indent = first[1] if first else '  '
+    block = ['rules:\n'] + [indent + '- ' + json.dumps(rule, ensure_ascii=False) + '\n' for rule in new_rules] + retained
     return root_value(''.join(lines[:found] + block + lines[end:]), 'find-process-mode', 'always')
 
 
@@ -164,61 +185,130 @@ def pipe_request(name, request, timeout=7):
 
 
 class Controller:
-    def __init__(self, root=None):
-        self.root = root or Path(os.environ.get('APPDATA', '')) / 'io.github.clash-verge-rev.clash-verge-rev'
+    def __init__(self, root=None, *, kind='clash-verge'):
+        if kind not in CLIENTS:
+            raise ValueError('请选择支持的代理客户端')
+        self.kind = kind
+        relative = 'com.follow/clash' if kind == 'flclash' else 'io.github.clash-verge-rev.clash-verge-rev'
+        self.root = root or Path(os.environ.get('APPDATA', '')) / relative
+
+    @property
+    def runtime_path(self):
+        return self.root / ('config.yaml' if self.kind == 'flclash' else 'clash-verge.yaml')
 
     def runtime(self):
-        return (self.root / 'clash-verge.yaml').read_text('utf-8-sig')
+        text = self.runtime_path.read_text('utf-8-sig')
+        if self.kind=='flclash':
+            # FlClash can patch its controller live before rebuilding config.yaml.
+            # The persisted UI values carry the current port and rotated secret.
+            try:
+                prefs=json.loads((self.root/'shared_preferences.json').read_text('utf-8-sig'))
+                value=prefs.get('flutter.config',prefs.get('config',{}))
+                config=json.loads(value) if isinstance(value,str) else value
+                overrides=config.get('patchClashConfig',{})
+                for key in ('external-controller','secret'):
+                    if isinstance(overrides.get(key),str):
+                        text=root_value(text,key,json.dumps(overrides[key],ensure_ascii=False))
+            except (OSError,ValueError,TypeError,AttributeError):
+                pass
+        return text
 
     def request(self, method, path, payload=None):
         text = self.runtime()
         pipe = scalar(text, 'external-controller-pipe')
-        if not pipe.startswith('\\\\.\\pipe\\') or len(pipe) > 200:
-            raise OSError('controller unavailable')
         secret = scalar(text, 'secret')
         body = b'' if payload is None else json.dumps(payload).encode()
         if any(c in secret for c in '\r\n'):
             raise OSError('invalid controller config')
         request = (f'{method} {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {secret}\r\n'
                    f'Connection: close\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n').encode() + body
-        raw = pipe_request(pipe, request)
+        if pipe.startswith('\\\\.\\pipe\\') and len(pipe) <= 200:
+            raw = pipe_request(pipe, request)
+        else:
+            address = urllib.parse.urlsplit('//' + scalar(text,'external-controller'))
+            host = address.hostname
+            if host not in ('localhost','127.0.0.1','::1','0.0.0.0','::') or not address.port or address.username or address.password or address.path:
+                raise OSError('local controller not enabled')
+            host = '127.0.0.1' if host in ('localhost','0.0.0.0') else '::1' if host == '::' else host
+            connection = http.client.HTTPConnection(host,address.port,timeout=7)
+            try:
+                connection.request(method,path,body=body,headers={'Authorization':'Bearer '+secret,'Content-Type':'application/json','Connection':'close'})
+                response = connection.getresponse()
+                data = response.read(MAX_REPLY+1)
+                if response.status not in (200,204):
+                    raise ControllerError(response.status)
+                if len(data)>MAX_REPLY:
+                    raise OSError('controller response too large')
+                return json.loads(data) if data else {}
+            finally:
+                connection.close()
         class MemorySocket:
             def makefile(self, *args):
                 return io.BytesIO(raw)
         response = http.client.HTTPResponse(MemorySocket())
         response.begin()
         data = response.read(MAX_REPLY + 1)
-        if response.status not in (200, 204) or len(data) > MAX_REPLY:
-            raise OSError('controller rejected operation')
+        if response.status not in (200, 204):
+            raise ControllerError(response.status)
+        if len(data) > MAX_REPLY:
+            raise OSError('controller response too large')
         return json.loads(data) if data else {}
 
 
 class ProxyProtection:
     def __init__(self, root, *, demo=False, controller=None):
         self.root, self.demo = root, demo
-        self.controller = controller or Controller()
+        self.controller = controller
+        supplied_kind = getattr(controller,'kind',None)
+        self.client = supplied_kind if supplied_kind in CLIENTS else 'clash-verge'
+        self.profiles = {}
         self.lock = threading.RLock()
         self.policies = {}
         self.group = ''
         self.state = 'idle'
         self.message = '未启用代理保护'
         self.failures = 0
+        self.egress = ''
+        self.probe_reason = ''
         self.path = root / 'routing-settings.json'
         if self.path.exists():
             try:
                 raw = json.loads(self.path.read_text('utf-8'))
+                self.client = raw.get('client') if raw.get('client') in CLIENTS else self.client
+                self.profiles = {key:value for key,value in raw.get('profiles',{}).items() if key in CLIENTS and isinstance(value,dict)}
+                raw = self.profiles.get(self.client, raw)
                 self.group = raw.get('group', '') if isinstance(raw.get('group'), str) else ''
                 self.policies = {key: value for key, value in raw.get('policies', {}).items() if re.fullmatch(r'[0-9a-f]{12}', key) and value in ('direct', 'proxy')}
             except (ValueError, TypeError, AttributeError):
                 pass
+        if self.controller is None:
+            self.controller = Controller(kind=self.client)
+
+    @property
+    def recovery_path(self):
+        return self.root / ('proxy-recovery-flclash.json' if self.client=='flclash' else 'proxy-recovery.json')
 
     def save(self):
-        atomic_write(self.path, json.dumps({'group':self.group, 'policies':self.policies}, ensure_ascii=False).encode())
+        self.profiles[self.client] = {'group':self.group, 'policies':self.policies.copy()}
+        atomic_write(self.path, json.dumps({'client':self.client, 'profiles':self.profiles, 'group':self.group, 'policies':self.policies}, ensure_ascii=False).encode())
+
+    def set_client(self, client):
+        if not isinstance(client,str) or client not in CLIENTS:
+            raise ValueError('请选择支持的代理客户端')
+        with self.lock:
+            self.save()
+            self.client = client
+            profile = self.profiles.get(client,{})
+            self.group = profile.get('group','')
+            self.policies = profile.get('policies',{}).copy()
+            self.controller = Controller(kind=client)
+            self.failures = 0; self.egress = ''; self.state = 'idle'; self.message = '请选择连接客户端'
+            self.save()
 
     def status(self):
         with self.lock:
-            return {'state':self.state, 'message':self.message, 'group':self.group,
-                    'restore_available':(self.root / 'proxy-recovery.json').exists()}
+            return {'state':self.state, 'message':self.message, 'group':self.group, 'client':self.client,
+                    'restore_available':self.recovery_path.exists(), 'egress':self.egress}
 
     def groups(self):
         if self.demo:
@@ -227,6 +317,8 @@ class ProxyProtection:
             rows = self.controller.request('GET', '/proxies').get('proxies', {})
             return sorted(name for name, row in rows.items() if row.get('type') in ('Selector','URLTest','Fallback','LoadBalance') and name not in ('GLOBAL',) and not any(c in name for c in ',\r\n'))
         except Exception:
+            if self.client=='flclash':
+                raise ValueError('请启动 FlClash，并在“外部控制”中开启本地接口后连接') from None
             raise ValueError('未连接 Clash Verge / Mihomo，请先启动代理客户端') from None
 
     def rules(self, paths, policies=None, group=None):
@@ -268,27 +360,48 @@ class ProxyProtection:
 
     def _apply(self, rules, old):
         try:
-            if self.controller.request('GET', '/configs').get('mode') != 'rule':
+            general = self.controller.request('GET', '/configs')
+            if general.get('mode') != 'rule':
                 raise ValueError('请先将代理客户端切换为规则模式')
             runtime = self.controller.runtime()
-            script_path = self.controller.root / 'profiles/Script.js'
-            original = script_path.read_bytes()
-            updated = make_script(original.decode('utf-8-sig'), rules).encode('utf-8')
             payload = apply_rules(runtime, rules, old)
+            # Retain live TUN/port settings and selected nodes during a rule reload.
+            if isinstance(general.get('tun'),dict):
+                payload = root_section(payload,'tun',general['tun'])
+            for key in ('mixed-port','port','socks-port','redir-port','tproxy-port'):
+                if key in general:
+                    payload = root_value(payload,key,str(general[key]))
+            proxies = self.controller.request('GET','/proxies').get('proxies',{})
+            selected = {name:row['now'] for name,row in proxies.items() if row.get('type')=='Selector' and row.get('now') in row.get('all',[])}
+            if self.client=='flclash':
+                target = self.controller.runtime_path
+                original = target.read_bytes()
+                updated = payload.encode('utf-8')
+                backup = self.root / 'proxy-flclash-original.yaml'
+            else:
+                target = self.controller.root / 'profiles/Script.js'
+                original = target.read_bytes()
+                updated = make_script(original.decode('utf-8-sig'), rules).encode('utf-8')
+                backup = self.root / 'proxy-script-original.js'
             # Core validates the full config before applying. Existing custom rules remain.
             self.controller.request('PUT', '/configs', {'payload':payload})
+            for name,choice in selected.items():
+                self.controller.request('PUT','/proxies/'+urllib.parse.quote(name,safe=''),{'name':choice})
             try:
-                backup = self.root / 'proxy-script-original.js'
                 if not backup.exists():
                     atomic_write(backup, original)
-                atomic_write(script_path, updated)
+                if target.read_bytes()!=original:
+                    raise OSError('client file changed during reload')
+                atomic_write(target, updated)
             except OSError:
                 self.controller.request('PUT', '/configs', {'payload':runtime})
                 raise
+        except ControllerError as error:
+            raise ValueError(f'代理配置未被内核接受（HTTP {error.status}），请检查客户端规则') from None
         except ValueError:
             raise
         except Exception:
-            raise ValueError('代理分流应用失败，原设置已保留，请检查客户端连接') from None
+            raise ValueError('代理分流应用未完成，请检查客户端连接后重试') from None
 
     @staticmethod
     def system_proxy(values=None):
@@ -308,17 +421,79 @@ class ProxyProtection:
                     result[name] = default
             return result
 
+    def active_exit(self):
+        """Follow the running routing mode and selected chain, not a guard's group.
+
+        GLOBAL can point to DIRECT while rule mode routes its default traffic
+        through a different selector. URLTest on a group can pick a healthy
+        alternative; test its *currently selected leaf* instead.
+        """
+        config = self.controller.request('GET', '/configs')
+        rows = self.controller.request('GET', '/proxies').get('proxies', {})
+        mode = str(config.get('mode', '')).lower()
+        if mode == 'direct':
+            self.egress = 'DIRECT'; self.probe_reason = '当前客户端处于直连模式'
+            return None
+        if mode == 'global':
+            target = 'GLOBAL'
+        elif mode == 'rule':
+            rules = self.controller.request('GET', '/rules').get('rules', [])
+            target = next((r.get('proxy') for r in reversed(rules) if r.get('type', '').lower() == 'match'), None)
+            if target in ('DIRECT', 'REJECT', 'REJECT-DROP', None):
+                # A DIRECT catch-all may still coexist with one explicit proxy
+                # selector. Several different selectors require user intent.
+                references = {r.get('proxy') for r in rules if r.get('proxy') in rows
+                              and rows[r['proxy']].get('type', '').lower() not in ('direct', 'reject', 'rejectdrop')}
+                if len(references) != 1:
+                    self.egress = ''; self.probe_reason = '未确认唯一代理出口，保留当前设置'
+                    return None
+                target = next(iter(references))
+        else:
+            self.egress = ''; self.probe_reason = '未识别代理路由模式，保留当前设置'
+            return None
+        chain = []
+        for _ in range(16):
+            if not isinstance(target, str) or target in chain or target not in rows:
+                self.egress = ' → '.join(chain); self.probe_reason = '代理选择链尚未就绪，保留当前设置'
+                return None
+            chain.append(target)
+            row = rows[target]
+            kind = row.get('type', '').lower()
+            if kind in ('direct', 'reject', 'rejectdrop', 'compatible', 'pass') or target in ('DIRECT', 'REJECT', 'REJECT-DROP'):
+                self.egress = ' → '.join(chain); self.probe_reason = '当前出口为直连或拦截策略'
+                return None
+            if 'all' in row:
+                target = row.get('now')
+                continue
+            self.egress = ' → '.join(chain); self.probe_reason = ''
+            return target
+        self.egress = ' → '.join(chain); self.probe_reason = '代理选择链过长，保留当前设置'
+        return None
+
     def proxy_healthy(self):
-        group = self.group or 'GLOBAL'
-        for url in ('http://www.msftconnecttest.com/connecttest.txt', 'http://connect.rom.miui.com/generate_204'):
+        try:
+            leaf = self.active_exit()
+        except Exception:
+            self.probe_reason = '代理控制器未连接，出口状态待确认'
+            return None
+        if leaf is None:
+            return None
+        failures = 0
+        for url in ('https://www.gstatic.com/generate_204', 'https://cp.cloudflare.com/generate_204'):
             try:
-                query = urllib.parse.urlencode({'url':url, 'timeout':3500, 'expected':'204' if 'generate_204' in url else '200'})
-                reply = self.controller.request('GET', '/proxies/' + urllib.parse.quote(group, safe='') + '/delay?' + query)
+                query = urllib.parse.urlencode({'url':url, 'timeout':3500, 'expected':'204'})
+                reply = self.controller.request('GET', '/proxies/' + urllib.parse.quote(leaf, safe='') + '/delay?' + query)
                 if isinstance(reply.get('delay'), (int, float)) and reply['delay'] > 0:
                     return True
+                self.probe_reason = '出口检测返回未识别结果，保留当前设置'
+            except ControllerError as error:
+                if error.status in (503, 504):
+                    failures += 1
+                else:
+                    self.probe_reason = '代理出口检测接口未就绪，保留当前设置'
             except Exception:
-                pass
-        return False
+                self.probe_reason = '代理控制器未响应，出口状态待确认'
+        return False if failures == 2 else None
 
     def direct_healthy(self, cancel):
         from .network import Network
@@ -327,22 +502,41 @@ class ProxyProtection:
         # Force the existing physical WiFi adapter path to avoid circular TUN checks.
         return network.opener.try_wifi_path() and network.online()
 
-    def _verge_flags(self, enable, expected=None):
+    def _client_flags(self, enable=None, expected=None):
+        if self.client=='flclash':
+            path = self.controller.root / 'shared_preferences.json'
+            original = path.read_bytes()
+            document = json.loads(original.decode('utf-8-sig'))
+            key = 'flutter.config' if 'flutter.config' in document else 'config'
+            config = json.loads(document[key]) if isinstance(document[key],str) else document[key]
+            flags = {'enable_system_proxy':str(bool(config.get('networkProps',{}).get('systemProxy',True))).lower(),
+                     'enable_tun_mode':str(bool(config.get('patchClashConfig',{}).get('tun',{}).get('enable',False))).lower()}
+            if expected is not None and flags!=expected:
+                raise ValueError('代理客户端设置已变化，请在客户端中恢复')
+            if enable:
+                config.setdefault('networkProps',{})['systemProxy']=enable['enable_system_proxy']=='true'
+                config.setdefault('patchClashConfig',{}).setdefault('tun',{})['enable']=enable['enable_tun_mode']=='true'
+                document[key]=json.dumps(config,ensure_ascii=False) if isinstance(document[key],str) else config
+                if path.read_bytes()!=original:
+                    raise ValueError('客户端设置正在保存，请稍后重试')
+                atomic_write(path,json.dumps(document,ensure_ascii=False).encode())
+            return flags
         path = self.controller.root / 'verge.yaml'
         text = path.read_text('utf-8-sig')
         flags = {key:scalar(text,key) for key in ('enable_system_proxy','enable_tun_mode')}
         if expected is not None and any(flags[k] != expected[k] for k in flags):
             raise ValueError('代理客户端设置已变化，请在客户端中恢复')
-        for key, value in enable.items():
-            text = root_value(text, key, value)
-        atomic_write(path, text.encode('utf-8'))
+        if enable:
+            for key, value in enable.items():
+                text = root_value(text, key, value)
+            atomic_write(path, text.encode('utf-8'))
         return flags
 
     def fail_open(self):
         """Resume partial work after a controller outage; keep the original snapshot."""
         if self.demo:
             raise ValueError('演示模式不切换系统网络')
-        record_path = self.root / 'proxy-recovery.json'
+        record_path = self.recovery_path
         if record_path.exists():
             snapshot = json.loads(record_path.read_text('utf-8'))
         else:
@@ -361,7 +555,7 @@ class ProxyProtection:
             tun = bool(config.get('tun', {}).get('enable'))
             if not owns_proxy and not tun:
                 return False
-            flags = {key:scalar((self.controller.root/'verge.yaml').read_text('utf-8-sig'),key) for key in ('enable_system_proxy','enable_tun_mode')}
+            flags = self._client_flags()
             snapshot = {'proxy':proxy, 'owns_proxy':owns_proxy, 'tun':tun, 'flags':flags, 'proxy_disabled':False, 'tun_disabled':False}
             atomic_write(record_path, json.dumps(snapshot).encode())
         errors = []
@@ -379,7 +573,7 @@ class ProxyProtection:
                 self.system_proxy({'ProxyEnable':0})
                 snapshot['proxy_disabled'] = True
             # Persistence only changes the switches that actually completed.
-            self._verge_flags({'enable_tun_mode':'false' if snapshot['tun_disabled'] else snapshot['flags']['enable_tun_mode'],
+            self._client_flags({'enable_tun_mode':'false' if snapshot['tun_disabled'] else snapshot['flags']['enable_tun_mode'],
                                'enable_system_proxy':'false' if snapshot['proxy_disabled'] else snapshot['flags']['enable_system_proxy']})
         finally:
             atomic_write(record_path, json.dumps(snapshot).encode())
@@ -391,12 +585,12 @@ class ProxyProtection:
         with self.lock:
             if self.demo:
                 raise ValueError('演示模式不切换系统网络')
-            path = self.root / 'proxy-recovery.json'
+            path = self.recovery_path
             if not path.exists():
                 raise ValueError('没有待恢复的代理设置')
             try:
                 saved = json.loads(path.read_text('utf-8'))
-                flags = {key:scalar((self.controller.root/'verge.yaml').read_text('utf-8-sig'),key) for key in saved['flags']}
+                flags = self._client_flags()
                 expected = {'enable_system_proxy':'false' if saved['proxy_disabled'] else saved['flags']['enable_system_proxy'], 'enable_tun_mode':'false' if saved['tun_disabled'] else saved['flags']['enable_tun_mode']}
                 if flags != expected:
                     raise ValueError('代理客户端设置已变化，请在客户端中恢复')
@@ -407,7 +601,7 @@ class ProxyProtection:
                     self.controller.request('PATCH', '/configs', {'tun':{'enable':saved['tun']}})
                 if saved['proxy_disabled']:
                     self.system_proxy(saved['proxy'])
-                self._verge_flags(saved['flags'])
+                self._client_flags(saved['flags'])
                 path.unlink()
                 self.failures = 0; self.state = 'restored'; self.message = '已恢复代理设置'
             except ValueError:
@@ -415,38 +609,52 @@ class ProxyProtection:
             except Exception:
                 raise ValueError('代理设置尚未恢复，请启动代理客户端后重试') from None
 
-    def tick(self, cancel, event, allowed=lambda: True):
+    def tick(self, cancel, event, allowed=lambda: True, *, required_failures=3, switch_allowed=lambda: True):
         notice = None
+        sampled_exit = ''
         with self.lock:
             if self.demo or cancel.is_set() or not allowed():
                 return
             try:
-                record = self.root/'proxy-recovery.json'
+                record = self.recovery_path
                 if record.exists():
                     saved = json.loads(record.read_text('utf-8'))
                     complete = (not saved['tun'] or saved['tun_disabled']) and (not saved['owns_proxy'] or saved['proxy_disabled'])
                     if complete:
                         self.state = 'direct'; self.message = '已切换直连，等待手动恢复'; return
                 else:
-                    if self.proxy_healthy():
-                        self.failures = 0; self.state = 'healthy'; self.message = '代理连接正常'; return
+                    previous_exit = self.egress
+                    healthy = self.proxy_healthy()
+                    sampled_exit = self.egress
+                    if sampled_exit != previous_exit:
+                        self.failures = 0
+                    if healthy is True:
+                        self.failures = 0; self.state = 'healthy'; self.message = '代理出口正常'; return
+                    if healthy is None:
+                        self.failures = 0; self.state = 'uncertain'; self.message = self.probe_reason or '代理出口待确认'; return
+                    if not switch_allowed():
+                        self.failures = 0; self.state = 'failed'; self.message = '代理出口异常，自动关闭尚未开启'; return
                     if cancel.is_set() or not allowed():
                         return
                     if not self.direct_healthy(cancel):
                         self.failures = 0; self.state = 'uncertain'; self.message = '直连也未通过，保留代理设置'; return
                     self.failures += 1
-                    self.state = 'checking'; self.message = f'代理异常，正在复核 {min(self.failures,3)}/3'
-                    if self.failures < 3:
+                    self.state = 'checking'; self.message = f'代理出口异常，正在复核 {min(self.failures,required_failures)}/{required_failures}'
+                    if self.failures < required_failures:
                         return
-                if cancel.is_set() or not allowed():
+                if cancel.is_set() or not allowed() or not switch_allowed():
                     return
+                if not record.exists() and sampled_exit:
+                    confirmed_leaf = self.active_exit()
+                    if confirmed_leaf is None or self.egress != sampled_exit:
+                        self.failures = 0; self.state = 'uncertain'; self.message = '出口已切换，等待重新检测'; return
                 if self.fail_open():
                     self.state = 'direct'; self.message = '代理故障，已切换全机直连'
-                    notice = ('info', '代理连续异常，已关闭系统代理和 TUN，等待手动恢复')
+                    notice = ('info', '代理出口异常，已关闭系统代理和 TUN，等待手动恢复')
                 else:
                     self.state = 'idle'; self.message = '未检测到本客户端的系统代理或 TUN'
             except Exception:
-                if self.state != 'error' and self.failures >= 3:
+                if self.state != 'error' and self.failures >= required_failures:
                     notice = ('error', '代理切换未完成，请在代理客户端中检查 TUN 和系统代理')
                 self.state = 'error'; self.message = '代理保护操作未完成，请检查客户端'
         # Do not hold the routing lock while the service persists a log record.
@@ -461,3 +669,15 @@ class ProxyProtection:
                 self._apply(new, old)
             self.policies = remaining
             self.save()
+
+    def ensure_rules(self, paths):
+        """FlClash regenerates config.yaml on profile reload; restore only our rules."""
+        if self.demo or self.client!='flclash' or not self.policies or self.recovery_path.exists():
+            return
+        with self.lock:
+            wanted = self.rules(paths)
+            live = self.controller.request('GET','/rules').get('rules',[])
+            expected = [(rule.split(',',2)[1],rule.split(',',2)[2]) for rule in wanted]
+            present = [(row.get('payload'),row.get('proxy')) for row in live if row.get('type')=='ProcessPath']
+            if present[:len(expected)]!=expected:
+                self._apply(wanted,wanted)

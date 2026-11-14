@@ -377,9 +377,10 @@
           <div class="glass-panel probes-workspace">
             <div class="proxy-card">
               <div class="section-title-row"><span class="slot-section-title">代理保护</span><span id="proxy-status" class="glass-pill pill-subtle">未启用</span></div>
-              <div class="proxy-actions"><label class="glass-check-item"><input id="proxy-fail-open" type="checkbox" class="glass-checkbox"><span>代理故障时自动切换全机直连</span></label><button id="proxy-restore" type="button" class="btn-glass-action btn-sm" disabled>恢复代理</button></div>
-              <div class="proxy-actions"><label for="proxy-group">代理组</label><select id="proxy-group" class="glass-input"><option value="">未选择</option></select><button id="proxy-detect" type="button" class="btn-glass-action btn-sm">连接客户端</button></div>
-              <p class="proxy-note">支持 Clash Verge / Mihomo。直连避开代理节点；全机切换后可手动恢复。</p>
+              <div class="proxy-actions"><label class="glass-check-item"><input id="proxy-fail-open" type="checkbox" class="glass-checkbox"><span>代理出口异常时关闭系统代理和 TUN</span></label><button id="proxy-check" type="button" class="btn-glass-action btn-sm">检测出口</button><button id="proxy-restore" type="button" class="btn-glass-action btn-sm" disabled>恢复代理</button></div>
+              <div class="proxy-actions"><label for="proxy-client">客户端</label><select id="proxy-client" class="glass-input"><option value="clash-verge">Clash Verge</option><option value="flclash">FlClash</option></select><button id="proxy-detect" type="button" class="btn-glass-action btn-sm">连接客户端</button></div>
+              <div class="proxy-actions"><label for="proxy-group">守护代理组</label><select id="proxy-group" class="glass-input"><option value="">未选择</option></select></div>
+              <p id="proxy-egress" class="proxy-note">出口随客户端当前选择检测，守护代理组用于程序分流。</p>
             </div>
             <div class="probes-toolbar">
               <div class="toolbar-left">

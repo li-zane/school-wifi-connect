@@ -21,3 +21,5 @@ dist/
 routing-settings.json
 proxy-recovery.json
 proxy-script-original.js
+proxy-recovery-flclash.json
+proxy-flclash-original.yaml

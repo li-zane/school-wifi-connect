@@ -81,6 +81,7 @@ class Service:
         self.guards = ApplicationGuards(store.root)
         self.proxy = ProxyProtection(store.root, demo=demo)
         self.proxy_wake = threading.Event()
+        self.proxy_check_requested = threading.Event()
         if (store.root / "events.jsonl").exists():
             legacy_normal = None
             with (store.root / "events.jsonl").open("rb") as stream:
@@ -338,7 +339,12 @@ class Service:
                 self.health('guard:' + removed, '', False)
 
     def proxy_action(self, action, raw):
-        if action == 'restore':
+        if action == 'client':
+            self.proxy.set_client(raw.get('client'))
+        elif action == 'check':
+            self.proxy_check_requested.set()
+            self.proxy_wake.set()
+        elif action == 'restore':
             self.proxy.restore()
         elif action in ('policy', 'group'):
             with self.lock:
@@ -349,13 +355,28 @@ class Service:
                 self.proxy.configure(paths, group=raw.get('group', ''))
         else:
             raise ValueError("代理操作不存在")
+        self.proxy_wake.set()
 
     def _proxy_work(self):
         while not self.closed.is_set():
             enabled = self.store.settings["proxy_fail_open"] and not self.demo
-            if enabled:
-                self.proxy.tick(self.closed, self.guard_event, lambda: self.store.settings["proxy_fail_open"])
-            self.proxy_wake.wait(15 if enabled else None)
+            requested = self.proxy_check_requested.is_set()
+            self.proxy_check_requested.clear()
+            synchronize = self.proxy.client=='flclash' and bool(self.proxy.policies) and not self.demo
+            if synchronize:
+                try:
+                    with self.lock:
+                        paths = list(self.guards.paths)
+                    self.proxy.ensure_rules(paths)
+                except Exception:
+                    with self.proxy.lock:
+                        self.proxy.state='error'; self.proxy.message='FlClash 分流待同步，请连接本地接口'
+            if enabled or requested:
+                self.proxy.tick(self.closed, self.guard_event,
+                    lambda: requested or self.store.settings["proxy_fail_open"],
+                    required_failures=1 if requested else 3,
+                    switch_allowed=lambda: self.store.settings["proxy_fail_open"])
+            self.proxy_wake.wait(15 if enabled or synchronize else None)
             self.proxy_wake.clear()
 
     def candidates(self):
@@ -408,6 +429,13 @@ class Service:
                     self.guards.check(self.cancel, self.guard_event, self.health)
                     network = self.network_factory(self.cancel)
                     network.recover(settings, username, password, self.event)
+                    if settings['proxy_fail_open'] and not self.cancel.is_set():
+                        self.event('checking', '正在检测当前代理出口')
+                        # This network check already established WiFi connectivity.
+                        # Both HTTPS exit probes still have to fail, and tick
+                        # reconfirms the physical direct path before switching.
+                        self.proxy.tick(self.cancel, self.guard_event,
+                            lambda: self.store.settings['proxy_fail_open'], required_failures=1)
                 with self.lock:
                     if self.cancel.is_set():
                         raise InterruptedError()

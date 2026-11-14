@@ -182,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/probes/browse":
                 self.send(200, {"candidates": service.browse()})
                 return
-            elif self.path in ('/api/proxy/policy','/api/proxy/group','/api/proxy/restore'):
+            elif self.path in ('/api/proxy/policy','/api/proxy/group','/api/proxy/restore','/api/proxy/check','/api/proxy/client'):
                 service.proxy_action(self.path.rsplit('/',1)[1], raw)
             elif self.path in ("/api/probes/add", "/api/probes/remove", "/api/probes/clear", "/api/probes/elevate"):
                 service.probe_action(self.path.rsplit("/", 1)[1], raw)
