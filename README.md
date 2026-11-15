@@ -119,7 +119,7 @@ python -m venv .venv
 
 采用目录式 EXE，避免每次启动将整个 Python 解压到临时目录。运行时无需安装 Python。构建剔除测试框架、Tk、未使用的 bz2/lzma/zstd 压缩库，并移除 Python 文档字符串；保留 HTTPS 和自定义探测能力。原生托盘不加载 WebView2 程序集，窗口关闭后所有网页进程释放。前端无持续动画，隐藏页面停止轮询，后台按检测间隔休眠。
 
-发布仅分享 `dist/NJUSTWiFi-3.9.7-Windows-x64.zip` 或源码 ZIP，禁止直接压缩整个开发目录。桌面包中的 `NJUSTWiFi.exe` 是入口，`NJUSTWiFiWindow.exe` 和 `NJUSTWiFiBackend.exe` 、`NJUSTWiFiProxyBridge.exe` 以及 DLL、`_internal` 均需保留。WebView2 SDK 固定版本和 SHA256 校验，发布包保留其许可证。
+发布仅分享 `dist/NJUSTWiFi-3.9.8-Windows-x64.zip` 或源码 ZIP，禁止直接压缩整个开发目录。桌面包中的 `NJUSTWiFi.exe` 是入口，`NJUSTWiFiWindow.exe` 和 `NJUSTWiFiBackend.exe` 、`NJUSTWiFiProxyBridge.exe` 以及 DLL、`_internal` 均需保留。WebView2 SDK 固定版本和 SHA256 校验，发布包保留其许可证。
 
 3.9.4 扩大右下角拉伸热区：原生窗口按 DPI 缩放至 28 像素，网页右下角增加 24 CSS 像素透明命中区并调用原生窗口拉伸。最大化时隐藏网页热区且禁用拉伸；不扩大其他边缘、不增加可见边框或常驻任务。
 

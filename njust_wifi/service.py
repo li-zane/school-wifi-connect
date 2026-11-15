@@ -69,6 +69,7 @@ class Service:
     def __init__(self, store: Store, *, demo: bool = False, network_factory=Network, balance_factory=BalanceClient):
         self.store, self.demo = store, demo
         self.updater = UpdateManager(store.root, demo=demo)
+        self.updater.local_proxy = lambda: self.proxy.local_proxy()
         self.network_factory = network_factory
         self.balance_factory = balance_factory
         self.lock = threading.RLock()

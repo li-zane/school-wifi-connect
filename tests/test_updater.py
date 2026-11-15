@@ -117,6 +117,87 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.manager.install()
 
 
+def proxy_target(handlers):
+    """The https target an opener was built with, or None for the default opener."""
+    for handler in handlers:
+        if isinstance(handler, urllib.request.ProxyHandler):
+            return handler.proxies.get('https') if handler.proxies else {}
+    return None
+
+
+class ReleaseFetchTests(unittest.TestCase):
+    def test_local_client_proxy_is_tried_before_direct(self):
+        from njust_wifi.updater import open_release
+        attempts = []
+
+        class Opener:
+            def __init__(self, proxy):
+                self.proxy = proxy
+
+            def open(self, request, timeout):
+                attempts.append(self.proxy)
+                if self.proxy == 'http://127.0.0.1:7897':
+                    return 'connected'
+                raise urllib.error.URLError('unavailable ' + repr(self.proxy))
+
+        def build(*handlers):
+            return Opener(proxy_target(handlers))
+
+        with patch('njust_wifi.updater.urllib.request.build_opener', side_effect=build):
+            self.assertEqual(open_release('https://github.com/x.zip', lambda: 'http://127.0.0.1:7897'), 'connected')
+        # TUN mode leaves the system proxy off and the direct route blackholed,
+        # so the client's port is tried first and never costs a timeout.
+        self.assertEqual(attempts, ['http://127.0.0.1:7897'])
+
+    def test_client_port_failure_falls_back_to_direct_and_reports_the_last_error(self):
+        from njust_wifi.updater import open_release
+
+        class Opener:
+            def __init__(self, proxy):
+                self.proxy = proxy
+
+            def open(self, request, timeout):
+                raise urllib.error.URLError('unreachable ' + repr(self.proxy))
+
+        def build(*handlers):
+            return Opener(proxy_target(handlers))
+
+        def broken():
+            raise OSError('controller down')
+
+        with patch('njust_wifi.updater.urllib.request.build_opener', side_effect=build):
+            with self.assertRaises(urllib.error.URLError) as error:
+                open_release('https://github.com/x.zip', broken)
+        self.assertIn('{}', str(error.exception))  # the direct attempt was last
+
+    def test_http_errors_are_not_retried_through_another_route(self):
+        from njust_wifi.updater import open_release
+        attempts = []
+
+        class Opener:
+            def open(self, request, timeout):
+                attempts.append(1)
+                raise urllib.error.HTTPError('https://github.com/x.zip', 403, 'rate limit', {}, io.BytesIO())
+
+        with patch('njust_wifi.updater.urllib.request.build_opener', return_value=Opener()):
+            with self.assertRaises(urllib.error.HTTPError):
+                open_release('https://github.com/x.zip', lambda: 'http://127.0.0.1:7897')
+        self.assertEqual(len(attempts), 1)
+
+    def test_manager_passes_its_client_proxy_to_every_release_fetch(self):
+        from njust_wifi.updater import UpdateManager
+        seen = []
+        with tempfile.TemporaryDirectory() as temp:
+            manager = UpdateManager(Path(temp))
+            manager.local_proxy = lambda: 'http://127.0.0.1:7897'
+            def read(url, *args, **kwargs):
+                seen.append((url, kwargs.get('local_proxy')))
+                return release()
+            with patch('njust_wifi.updater.read_json', side_effect=read):
+                manager.check()
+        self.assertEqual(seen, [('https://api.github.com/repos/li-zane/school-wifi-connect/releases/latest', manager.local_proxy)])
+
+
 class UpdateInstallerTests(unittest.TestCase):
     def test_installer_restore_never_rolls_back_a_finished_update(self):
         # The new backend can be mid-cycle right after boot, so /api/start may

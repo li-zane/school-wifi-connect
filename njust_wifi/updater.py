@@ -48,19 +48,33 @@ class ReleaseRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def open_release(url):
+def open_release(url, local_proxy=None):
     request = urllib.request.Request(url, headers={'User-Agent': 'school-wifi-connect/' + __version__, 'Accept': 'application/vnd.github+json' if url == RELEASE_API else 'application/octet-stream'})
-    # GitHub may require the user's working proxy. Fall back to direct requests.
+    # GitHub may require the user's proxy. A running client's local port comes
+    # first (TUN mode usually leaves the system proxy off and the direct route
+    # blackholed), then the environment or system proxy, then a direct attempt.
     try:
-        return urllib.request.build_opener(ReleaseRedirect()).open(request, timeout=20)
-    except urllib.error.HTTPError:
-        raise
-    except (OSError, urllib.error.URLError):
-        return urllib.request.build_opener(urllib.request.ProxyHandler({}), ReleaseRedirect()).open(request, timeout=20)
+        local = local_proxy() if local_proxy else None
+    except Exception:
+        local = None
+    proxies = [local] if local else []
+    proxies += [None, {}]
+    for target in proxies:
+        # None keeps the environment/system proxy; a URL routes through that one
+        # proxy; an empty mapping disables proxies.
+        handler = None if target is None else urllib.request.ProxyHandler({} if target == {} else {'https': target, 'http': target})
+        try:
+            opener = urllib.request.build_opener(*([handler] if handler is not None else []), ReleaseRedirect())
+            return opener.open(request, timeout=20)
+        except urllib.error.HTTPError:
+            raise
+        except (OSError, urllib.error.URLError) as error:
+            last = error
+    raise last
 
 
-def read_json(url, limit=1024 * 1024):
-    with open_release(url) as response:
+def read_json(url, limit=1024 * 1024, local_proxy=None):
+    with open_release(url, local_proxy) as response:
         data = response.read(limit + 1)
     if len(data) > limit:
         raise ValueError('发布信息过大')
@@ -127,6 +141,8 @@ class UpdateManager:
         self.stage = None
         self.manifest = None
         self.event = None
+        # Supplies the running proxy client's local port, e.g. http://127.0.0.1:7897.
+        self.local_proxy = None
 
     def status(self):
         with self.lock:
@@ -166,12 +182,12 @@ class UpdateManager:
 
     def check(self):
         try:
-            release = read_json(RELEASE_API)
+            release = read_json(RELEASE_API, local_proxy=self.local_proxy)
         except (OSError, urllib.error.URLError) as error:
             if hasattr(error, 'close'): error.close()
             # Public GitHub API quotas are shared by NAT/proxy users. The
             # release manifest endpoint needs neither API quota nor a token.
-            rows = read_json(LATEST_MANIFEST)
+            rows = read_json(LATEST_MANIFEST, local_proxy=self.local_proxy)
             packages = [r for r in rows if isinstance(r, dict) and re.fullmatch(r'NJUSTWiFi-\d+\.\d+\.\d+-Windows-x64\.zip', str(r.get('file', '')))] if isinstance(rows, list) else []
             if len(packages) != 1: raise ValueError('发布校验信息不完整')
             package = packages[0]
@@ -204,7 +220,7 @@ class UpdateManager:
         if not release: raise ValueError('请先检查新版本')
         if not self.install_root or self.demo:
             raise ValueError('请使用 Windows 桌面发布版安装更新')
-        rows = read_json(release['checksum_url'])
+        rows = read_json(release['checksum_url'], local_proxy=self.local_proxy)
         matching = [r for r in rows if isinstance(r, dict) and r.get('file') == release['name']] if isinstance(rows, list) else []
         if len(matching) != 1 or matching[0].get('bytes') != release['size'] or not re.fullmatch('[a-f0-9]{64}', matching[0].get('sha256', '')):
             raise ValueError('发布校验信息不匹配')
@@ -214,7 +230,7 @@ class UpdateManager:
         archive = job / 'release.zip'
         digest = hashlib.sha256(); received = 0
         try:
-            with open_release(release['url']) as response, archive.open('xb') as stream:
+            with open_release(release['url'], self.local_proxy) as response, archive.open('xb') as stream:
                 while block := response.read(65536):
                     received += len(block)
                     if received > release['size'] or received > MAX_DOWNLOAD:

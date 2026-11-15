@@ -604,6 +604,21 @@ class ProxyProtection:
             raise OSError('客户端开关状态待确认')
         return {key:value=='true' for key,value in flags.items()}
 
+    def local_proxy(self):
+        """The connected client's loopback HTTP port, or None.
+
+        TUN mode usually leaves the system proxy off, so an updater that only
+        follows the system or environment proxy would download directly.
+        """
+        if self.demo:
+            return None
+        try:
+            config = self.controller.request('GET', '/configs')
+            port = int(config.get('mixed-port') or config.get('port') or 0)
+        except Exception:
+            return None
+        return f'http://127.0.0.1:{port}' if 0 < port < 65536 else None
+
     @staticmethod
     def _owns_proxy(proxy, port):
         return proxy.get('ProxyEnable')==1 and bool(port) and bool(proxy.get('ProxyServer')) and all(
