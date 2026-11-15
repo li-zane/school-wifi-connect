@@ -341,6 +341,37 @@ class ProxyProtection:
         return {'url':option.get('url',''), 'secret_set':'secret' in option,
                 'automatic':not bool(option.get('url'))}
 
+    def controller_view(self):
+        """Explicit local settings view. Never include this in status or diagnostics."""
+        with self.lock:
+            option = self.controllers.get(self.client, {})
+            if not isinstance(option, dict):
+                option = {}
+            try:
+                # An isolated demo must not read the real client's credentials.
+                text = '' if self.demo else self.controller.runtime()
+            except (OSError, ValueError, TypeError):
+                text = ''
+            manual = option.get('url', '')
+            secret = option.get('secret', scalar(text, 'secret'))
+            url, transport = manual, 'http' if manual else ''
+            if not manual:
+                pipe = scalar(text, 'external-controller-pipe')
+                if pipe.startswith('\\\\.\\pipe\\') and len(pipe) <= 200:
+                    url, transport = pipe, 'pipe'
+                else:
+                    try:
+                        address = urllib.parse.urlsplit('//' + scalar(text, 'external-controller'))
+                        if (address.hostname in ('127.0.0.1', 'localhost', '::1', '0.0.0.0', '::') and address.port
+                                and not address.username and not address.password and not address.path):
+                            host = '[::1]' if ':' in address.hostname else '127.0.0.1'
+                            url, transport = f'http://{host}:{address.port}', 'http'
+                    except ValueError:
+                        pass
+            return {'client': self.client, 'url': url, 'secret': secret,
+                    'automatic': not bool(manual), 'url_override': manual,
+                    'secret_override': 'secret' in option, 'transport': transport}
+
     def configure_controller(self, raw):
         with self.lock:
             if raw.get('client', self.client) != self.client:

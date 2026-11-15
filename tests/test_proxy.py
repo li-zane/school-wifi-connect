@@ -542,6 +542,42 @@ class ProxyTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.proxy.configure_controller({'url':'','secret':'bad\r\nheader'})
         self.assertFalse(self.proxy.controllers_path.exists())
 
+    def test_explicit_controller_view_reads_automatic_url_and_plain_secret(self):
+        self.controller.runtime.return_value = 'external-controller: 0.0.0.0:9097\nsecret: "fixture-auto-secret"\n'
+        view = self.proxy.controller_view()
+        self.assertEqual(view['url'], 'http://127.0.0.1:9097')
+        self.assertEqual(view['secret'], 'fixture-auto-secret')
+        self.assertTrue(view['automatic'])
+        self.assertEqual(view['url_override'], '')
+        self.assertNotIn('fixture-auto-secret', json.dumps(self.proxy.status()))
+
+    def test_explicit_controller_view_matches_named_pipe_precedence(self):
+        self.controller.runtime.return_value = "external-controller-pipe: '\\\\.\\pipe\\wifi-fixture'\nexternal-controller: 127.0.0.1:9097\nsecret: fixture-pipe-key\n"
+        view = self.proxy.controller_view()
+        self.assertEqual(view['url'], r'\\.\pipe\wifi-fixture')
+        self.assertEqual(view['transport'], 'pipe')
+        self.assertEqual(view['secret'], 'fixture-pipe-key')
+
+    def test_controller_view_demo_never_reads_real_client_credentials(self):
+        self.proxy.demo = True
+        self.controller.runtime.side_effect = AssertionError('real config read in demo')
+        self.proxy.controllers = {'clash-verge':{'url':'http://127.0.0.1:9097','secret':'fixture-manual'}}
+        view = self.proxy.controller_view()
+        self.assertEqual(view['url'], 'http://127.0.0.1:9097')
+        self.assertEqual(view['secret'], 'fixture-manual')
+        self.assertFalse(view['automatic'])
+        self.assertTrue(view['secret_override'])
+        self.controller.runtime.assert_not_called()
+
+    def test_controller_view_keeps_client_secrets_separate(self):
+        self.proxy.demo = True
+        self.proxy.controllers = {'clash-verge':{'url':'http://127.0.0.1:9097','secret':'fixture-verge'},
+                                 'flclash':{'url':'http://127.0.0.1:9090','secret':'fixture-flclash'}}
+        self.assertEqual(self.proxy.controller_view()['secret'], 'fixture-verge')
+        self.proxy.set_client('flclash')
+        self.assertEqual(self.proxy.controller_view()['secret'], 'fixture-flclash')
+        self.assertEqual(self.proxy.controller_view()['client'], 'flclash')
+
 
 class HttpControllerTests(unittest.TestCase):
     def test_flclash_http_uses_local_token_without_environment_proxy(self):

@@ -1,4 +1,4 @@
-/* 代理保护 · 外部控制配置折叠区 & 分步图文教程弹窗 */
+/* 代理保护 · 外部控制器折叠区 & 分步图文教程弹窗 */
 
 .proxy-card {
   margin-bottom: 0;
@@ -28,6 +28,10 @@
   flex-wrap: wrap;
 }
 
+.proxy-note[hidden] {
+  display: none;
+}
+
 #proxy-guide-open {
   background: var(--blue-bg);
   border-color: var(--blue-border);
@@ -44,7 +48,7 @@
   flex-shrink: 0;
 }
 
-/* 外部控制配置折叠区 */
+/* 外部控制器折叠区 */
 .proxy-controller-details {
   margin-top: 12px;
   border-top: 1px solid var(--glass-border);
@@ -90,40 +94,23 @@
   border-radius: var(--radius-slot);
   background: var(--bg-slot);
   border: 1px solid var(--glass-border);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 .proxy-controller-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 14px;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px 12px;
+}
+
+.proxy-controller-reset {
+  min-height: 36px;
+  white-space: nowrap;
 }
 
 .proxy-controller-body .glass-input[aria-invalid="true"] {
   border-color: var(--pink-danger-ink);
   box-shadow: 0 0 0 3px rgba(182, 67, 89, 0.16);
-}
-
-.proxy-controller-foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-}
-
-.proxy-controller-hints {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.proxy-controller-tip {
-  font-size: 11.5px;
-  color: var(--text-muted);
 }
 
 /* 图文分步教程弹窗 */
@@ -258,7 +245,7 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: clamp(160px, 32dvh, 255px);
+  height: clamp(185px, 38dvh, 290px);
   padding: 8px;
   border-radius: 14px;
   border: 1px solid var(--glass-border);
@@ -301,16 +288,6 @@
   font-size: 11px;
   font-weight: 600;
   pointer-events: none;
-}
-
-.guide-note-box {
-  padding: 9px 12px;
-  border-radius: 12px;
-  background: var(--bg-slot);
-  border: 1px solid var(--glass-border);
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--text-muted);
 }
 
 .guide-footer {
@@ -356,6 +333,20 @@
 }
 
 #proxy-guide-prev:hover:not(:disabled) {
+  background: var(--blue-bg-hover);
+}
+
+.guide-go-btn[hidden] {
+  display: none;
+}
+
+.guide-go-btn {
+  background: var(--blue-bg);
+  border-color: var(--blue-border);
+  color: var(--blue-ink);
+}
+
+.guide-go-btn:hover:not(:disabled) {
   background: var(--blue-bg-hover);
 }
 
@@ -421,12 +412,6 @@
   text-align: center;
 }
 
-@media (max-width: 720px) {
-  .proxy-controller-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 @media (max-height: 650px) {
   .proxy-card {
     padding: 12px 14px;
@@ -441,14 +426,13 @@
   }
   .proxy-controller-body {
     padding: 10px;
-    gap: 8px;
   }
   .proxy-guide-card {
     padding: 14px 16px;
     gap: 10px;
   }
-  .guide-note-box {
-    padding: 7px 10px;
+  .guide-shot-btn {
+    height: clamp(150px, 34dvh, 225px);
   }
 }
 

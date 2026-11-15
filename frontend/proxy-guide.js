@@ -3,18 +3,25 @@ const GUIDE_DATA = {
     label: 'Clash Verge',
     steps: [
       {
-        title: '进入「外部控制」设置',
+        title: '进入外部控制设置',
         path: ['设置', 'Clash 设置', '外部控制'],
-        text: '打开 Clash Verge，在左侧栏进入「设置」，于「Clash 设置」区域点击「外部控制」。',
+        text: '打开 Clash Verge「设置」，在「Clash 设置」区域点击「外部控制」。',
         image: 'guide/verge-settings.webp',
         alt: 'Clash Verge 设置页面截图，右侧 Clash 设置区域中包含外部控制入口'
       },
       {
-        title: '开启外部控制并保存',
+        title: '开启外部控制并设置监听地址与密钥',
         path: ['启用外部控制器', '监听地址', 'API 访问密钥', '保存'],
-        text: '打开「启用外部控制器」，监听地址设为本机 127.0.0.1（如图中 127.0.0.1:9097），按需设置「API 访问密钥」后点击「保存」。',
+        text: '开启「启用外部控制器」，监听地址填 127.0.0.1:9097、API 访问密钥如 wifi-demo-key，点击「保存」。',
         image: 'guide/verge-controller.webp',
-        alt: 'Clash Verge 外部控制器监听地址弹窗截图，包含启用开关、监听地址、已遮盖的 API 访问密钥与保存按钮'
+        alt: 'Clash Verge 外部控制器监听地址弹窗截图，包含启用开关、监听地址、API 访问密钥与保存按钮'
+      },
+      {
+        title: '回 NJUST WiFi 核对并连接',
+        path: ['守护', '外部控制器', '连接客户端'],
+        text: '回到 NJUST WiFi「守护 › 外部控制器」，核对或填写 API（如 http://127.0.0.1:9097）与相同密钥，再点击「连接客户端」。',
+        image: 'guide/njust-controller-verge.webp',
+        alt: 'NJUST WiFi 守护页外部控制器配置截图，展示 Clash Verge 的 API 与示例密钥填入效果'
       }
     ]
   },
@@ -22,18 +29,25 @@ const GUIDE_DATA = {
     label: 'FlClash',
     steps: [
       {
-        title: '进入「常规」设置',
+        title: '进入常规设置',
         path: ['工具', '设置', '常规'],
-        text: '打开 FlClash，点击左侧「工具」图标，在「设置」列表底部选择「常规」。',
+        text: '打开 FlClash，进入左侧「工具」并在下方列表选择「常规」。',
         image: 'guide/flclash-settings.webp',
         alt: 'FlClash 工具菜单页面截图，下方设置列表中包含常规入口'
       },
       {
         title: '开启「外部控制器」',
-        path: ['常规', '入站', '外部控制器', '默认 9090'],
-        text: '进入「入站」区域打开「外部控制器」开关（默认 9090 端口），开启后按需查看或设置访问密钥；本软件仅连接本机 127.0.0.1。',
+        path: ['常规', '入站', '外部控制器'],
+        text: '开启外部控制器（默认 9090），下一步自动读取 API 与密钥。',
         image: 'guide/flclash-controller.webp',
-        alt: 'FlClash 常规设置的入站区域截图，显示外部控制器开关（当前关闭）与默认 9090 端口提示'
+        alt: 'FlClash 常规设置入站区域截图，显示外部控制器开关与默认 9090 端口说明'
+      },
+      {
+        title: '回 NJUST WiFi 核对并连接',
+        path: ['守护', '外部控制器', '连接客户端'],
+        text: '回到 NJUST WiFi「守护 › 外部控制器」，核对自动读取或填写 API（如 http://127.0.0.1:9090）与密钥，再点击「连接客户端」。',
+        image: 'guide/njust-controller-flclash.webp',
+        alt: 'NJUST WiFi 守护页外部控制器配置截图，展示 FlClash 的 API 与示例密钥填入效果'
       }
     ]
   }
@@ -43,7 +57,7 @@ const prefersReducedMotion = () =>
   typeof window.matchMedia === 'function' &&
   window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-export function initProxyGuide({ getClient } = {}) {
+export function initProxyGuide({ getClient, onConfigure } = {}) {
   const trigger = document.getElementById('proxy-guide-open');
   const modal = document.getElementById('modal-proxy-guide');
   const zoomModal = document.getElementById('modal-proxy-guide-zoom');
@@ -60,6 +74,7 @@ export function initProxyGuide({ getClient } = {}) {
   const shotImg = document.getElementById('proxy-guide-shot-img');
   const dotsWrap = document.getElementById('proxy-guide-dots');
   const prevBtn = document.getElementById('proxy-guide-prev');
+  const goBtn = document.getElementById('proxy-guide-go');
   const nextBtn = document.getElementById('proxy-guide-next');
   const closeBtn = document.getElementById('proxy-guide-close');
 
@@ -74,6 +89,7 @@ export function initProxyGuide({ getClient } = {}) {
   let stepIndex = 0;
   let returnFocus = null;
   let zoomReturnFocus = null;
+  let skipRestoreOnce = false;
   let modalBackdropDown = false;
   let zoomBackdropDown = false;
   let zoomedIn = false;
@@ -143,6 +159,7 @@ export function initProxyGuide({ getClient } = {}) {
 
     renderDots(index, total);
     prevBtn.disabled = index === 0;
+    if (goBtn) goBtn.hidden = index !== total - 1;
     nextBtn.textContent = index === total - 1 ? '完成' : '下一页';
 
     if (animate) {
@@ -163,6 +180,7 @@ export function initProxyGuide({ getClient } = {}) {
 
   function openGuide() {
     if (modal.open || document.querySelector('dialog[open]')) return;
+    skipRestoreOnce = false;
     returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : trigger;
     const client = getClient?.();
     activeClient = client === 'flclash' ? 'flclash' : 'clash-verge';
@@ -240,6 +258,12 @@ export function initProxyGuide({ getClient } = {}) {
     }
   });
 
+  goBtn?.addEventListener('click', () => {
+    skipRestoreOnce = true;
+    modal.close();
+    onConfigure?.(activeClient);
+  });
+
   nextBtn.addEventListener('click', () => {
     const { total } = currentStep();
     if (stepIndex < total - 1) {
@@ -279,7 +303,11 @@ export function initProxyGuide({ getClient } = {}) {
 
   modal.addEventListener('close', () => {
     if (zoomModal.open) zoomModal.close();
-    restoreFocus(returnFocus, trigger);
+    const shouldSkip = skipRestoreOnce;
+    skipRestoreOnce = false;
+    if (!shouldSkip) {
+      restoreFocus(returnFocus, trigger);
+    }
     returnFocus = null;
   });
 }

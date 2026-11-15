@@ -1,6 +1,6 @@
 import { initProxyGuide } from './proxy-guide.js';
 
-export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswordInput }) {
+export function initProxy({ apiRequest, showToast, onClientChanged }) {
   const enabled = document.getElementById('proxy-fail-open');
   const group = document.getElementById('proxy-group');
   const status = document.getElementById('proxy-status');
@@ -14,23 +14,30 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
   const controllerMode = document.getElementById('proxy-controller-mode');
   const controllerUrl = document.getElementById('proxy-controller-url');
   const controllerSecret = document.getElementById('proxy-controller-secret');
-  const controllerSecretToggle = document.getElementById('proxy-controller-secret-toggle');
-  const controllerSecretState = document.getElementById('proxy-controller-secret-state');
-  const controllerClearSecret = document.getElementById('proxy-controller-clear-secret');
+  const controllerReset = document.getElementById('proxy-controller-reset');
 
   let activeRefresh = null;
   let queuedRefresh = false;
+  let controllerFetchPromise = null;
+  let controllerFetchEpoch = -1;
   let refreshEpoch = 0;
 
   let syncedClient = client.value || 'clash-verge';
   let draftClient = syncedClient;
   let lastSavedUrl = '';
-  let secretSet = false;
+  let urlOverride = '';
+  let lastSavedSecret = '';
+  let secretOverride = false;
+  let controllerAutomatic = true;
   let urlDirty = false;
   let secretDirty = false;
+  let urlDraftVersion = 0;
+  let secretDraftVersion = 0;
   let controllerSaving = false;
   let controllerSavePromise = null;
+  let pendingClientSwitch = false;
   let switchingClient = false;
+  let resetPointerDown = false;
 
   const post = (path, payload) =>
     apiRequest(path, {
@@ -39,45 +46,36 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
       body: JSON.stringify(payload)
     });
 
-  initProxyGuide({ getClient: () => syncedClient || client.value || 'clash-verge' });
-
-  function resetSecretVisibility() {
-    if (!controllerSecret || controllerSecret.type === 'password') return;
-    if (togglePasswordInput && controllerSecretToggle) {
-      togglePasswordInput(controllerSecret, controllerSecretToggle);
-    } else {
-      controllerSecret.type = 'password';
-    }
+  function scrollControllerIntoView() {
+    const card = controllerDetails?.closest('.proxy-card');
+    if (!card || card.scrollHeight <= card.clientHeight) return;
+    const reduced =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const targetTop =
+      card.scrollTop +
+      controllerDetails.getBoundingClientRect().top -
+      card.getBoundingClientRect().top -
+      10;
+    card.scrollTo({ top: Math.max(0, targetTop), behavior: reduced ? 'auto' : 'smooth' });
   }
 
   function renderControllerMeta() {
     const isFlClash = syncedClient === 'flclash';
-    const automatic = !lastSavedUrl;
+    const manual = Boolean(urlOverride) || Boolean(secretOverride) || !controllerAutomatic;
     if (controllerMode) {
-      controllerMode.textContent = automatic ? '自动读取' : '手动地址';
-      controllerMode.className = automatic ? 'glass-pill pill-subtle' : 'glass-pill pill-soft';
+      controllerMode.textContent = manual ? '手动' : '自动';
+      controllerMode.className = manual ? 'glass-pill pill-soft' : 'glass-pill pill-subtle';
     }
     if (controllerUrl) {
-      controllerUrl.placeholder = isFlClash
-        ? '留空自动读取（默认 9090 端口，如 http://127.0.0.1:9090）'
-        : '留空自动读取（如 http://127.0.0.1:9097）';
+      controllerUrl.placeholder = isFlClash ? 'http://127.0.0.1:9090' : 'http://127.0.0.1:9097';
       controllerUrl.disabled = switchingClient;
     }
     if (controllerSecret) {
-      controllerSecret.placeholder = secretSet
-        ? '已保存手动密钥，留空保持不变'
-        : '留空保持已有 / 自动读取';
       controllerSecret.disabled = switchingClient;
     }
-    if (controllerSecretToggle) {
-      controllerSecretToggle.disabled = switchingClient;
-    }
-    if (controllerSecretState) {
-      controllerSecretState.textContent = secretSet ? '已设置手动密钥' : '未设置手动密钥';
-      controllerSecretState.className = secretSet ? 'glass-pill pill-soft' : 'glass-pill pill-subtle';
-    }
-    if (controllerClearSecret) {
-      controllerClearSecret.disabled = !secretSet || controllerSaving || switchingClient;
+    if (controllerReset) {
+      controllerReset.disabled = controllerSaving || switchingClient;
     }
   }
 
@@ -101,14 +99,93 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
     }
   }
 
-  function applyControllerState(data, clientChangedOnServer) {
-    const ctrl = data.controller || {};
+  function fetchControllerOnce(epoch = refreshEpoch) {
+    if (controllerFetchPromise && controllerFetchEpoch === epoch) {
+      return controllerFetchPromise;
+    }
+    controllerFetchEpoch = epoch;
+    const p = apiRequest('/api/proxy/controller')
+      .then(
+        data => ({ ok: true, data }),
+        () => ({ ok: false, data: null })
+      )
+      .finally(() => {
+        if (controllerFetchPromise === p) controllerFetchPromise = null;
+      });
+    controllerFetchPromise = p;
+    return p;
+  }
+
+  function clearDraftsAndFields(nextClient) {
+    urlDirty = false;
+    secretDirty = false;
+    urlDraftVersion += 1;
+    secretDraftVersion += 1;
+    lastSavedUrl = '';
+    urlOverride = '';
+    lastSavedSecret = '';
+    secretOverride = false;
+    controllerAutomatic = true;
+    draftClient = nextClient;
+    if (controllerUrl) {
+      controllerUrl.value = '';
+      controllerUrl.removeAttribute('aria-invalid');
+    }
+    if (controllerSecret) {
+      controllerSecret.value = '';
+      controllerSecret.removeAttribute('aria-invalid');
+    }
+  }
+
+  function applyControllerDetails(ctrl, clientChangedOnServer) {
+    if (!ctrl || (ctrl.client && ctrl.client !== syncedClient)) return false;
+
     lastSavedUrl = typeof ctrl.url === 'string' ? ctrl.url : '';
-    secretSet = Boolean(ctrl.secret_set);
+    urlOverride = typeof ctrl.url_override === 'string' ? ctrl.url_override : '';
+    lastSavedSecret = typeof ctrl.secret === 'string' ? ctrl.secret : '';
+    secretOverride = Boolean(ctrl.secret_override);
+    controllerAutomatic = ctrl.automatic !== undefined ? Boolean(ctrl.automatic) : (!urlOverride && !secretOverride);
 
     if (clientChangedOnServer && !controllerSaving) {
       urlDirty = false;
       secretDirty = false;
+      urlDraftVersion += 1;
+      secretDraftVersion += 1;
+      draftClient = syncedClient;
+      if (controllerUrl) {
+        controllerUrl.value = lastSavedUrl;
+        controllerUrl.removeAttribute('aria-invalid');
+      }
+      if (controllerSecret) {
+        controllerSecret.value = lastSavedSecret;
+        controllerSecret.removeAttribute('aria-invalid');
+      }
+    } else {
+      if (controllerUrl && !urlDirty && !controllerSaving && document.activeElement !== controllerUrl) {
+        controllerUrl.value = lastSavedUrl;
+        controllerUrl.removeAttribute('aria-invalid');
+      }
+      if (controllerSecret && !secretDirty && !controllerSaving && document.activeElement !== controllerSecret) {
+        controllerSecret.value = lastSavedSecret;
+        controllerSecret.removeAttribute('aria-invalid');
+      }
+    }
+    renderControllerMeta();
+    return true;
+  }
+
+  function applyFallbackSummary(summary, clientChangedOnServer) {
+    const ctrl = summary || {};
+    lastSavedUrl = typeof ctrl.url === 'string' ? ctrl.url : '';
+    urlOverride = lastSavedUrl;
+    secretOverride = Boolean(ctrl.secret_set);
+    controllerAutomatic = ctrl.automatic !== undefined ? Boolean(ctrl.automatic) : (!urlOverride && !secretOverride);
+    if (clientChangedOnServer) {
+      lastSavedSecret = '';
+      urlDirty = false;
+      secretDirty = false;
+      urlDraftVersion += 1;
+      secretDraftVersion += 1;
       draftClient = syncedClient;
       if (controllerUrl) {
         controllerUrl.value = lastSavedUrl;
@@ -117,17 +194,10 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
       if (controllerSecret) {
         controllerSecret.value = '';
         controllerSecret.removeAttribute('aria-invalid');
-        resetSecretVisibility();
       }
-    } else {
-      if (controllerUrl && !urlDirty && !controllerSaving && document.activeElement !== controllerUrl) {
-        controllerUrl.value = lastSavedUrl;
-        controllerUrl.removeAttribute('aria-invalid');
-      }
-      if (controllerSecret && !secretDirty && !controllerSaving && document.activeElement !== controllerSecret) {
-        controllerSecret.value = '';
-        controllerSecret.removeAttribute('aria-invalid');
-      }
+    } else if (controllerUrl && !urlDirty && !controllerSaving && document.activeElement !== controllerUrl) {
+      controllerUrl.value = lastSavedUrl;
+      controllerUrl.removeAttribute('aria-invalid');
     }
     renderControllerMeta();
   }
@@ -142,8 +212,12 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
         queuedRefresh = false;
         const epoch = refreshEpoch;
         try {
-          const data = await apiRequest('/api/proxy');
-          if (epoch !== refreshEpoch || switchingClient) continue;
+          const [data, initialCtrl] = await Promise.all([
+            apiRequest('/api/proxy'),
+            fetchControllerOnce(epoch)
+          ]);
+          if (epoch !== refreshEpoch || switchingClient || pendingClientSwitch) continue;
+
           const nextClient = data.client || 'clash-verge';
           const clientChangedOnServer = nextClient !== syncedClient;
           syncedClient = nextClient;
@@ -152,15 +226,32 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
           client.value = nextClient;
           enabled.checked = data.enabled;
           status.textContent = data.message || '未启用自动切换';
-          egress.textContent = data.egress
-            ? `当前出口：${data.egress}`
-            : '出口随客户端当前选择检测，守护代理组用于程序分流。';
+          const egressText = data.egress ? `当前出口：${data.egress}` : '';
+          egress.textContent = egressText;
+          egress.hidden = !egressText;
           restore.disabled = !data.restore_available;
           if (data.group && ![...group.options].some(option => option.value === data.group)) {
             group.add(new Option(data.group, data.group));
           }
           group.value = data.group;
-          applyControllerState(data, clientChangedOnServer);
+
+          if (clientChangedOnServer && !controllerSaving) {
+            clearDraftsAndFields(nextClient);
+          }
+
+          let ctrlResult = initialCtrl;
+          if (ctrlResult?.ok && ctrlResult.data?.client && ctrlResult.data.client !== syncedClient) {
+            controllerFetchEpoch = -1;
+            controllerFetchPromise = null;
+            ctrlResult = await fetchControllerOnce(epoch);
+            if (epoch !== refreshEpoch || switchingClient || pendingClientSwitch) continue;
+          }
+
+          if (ctrlResult?.ok && (!ctrlResult.data?.client || ctrlResult.data.client === syncedClient)) {
+            applyControllerDetails(ctrlResult.data, clientChangedOnServer);
+          } else {
+            applyFallbackSummary(data.controller, clientChangedOnServer);
+          }
         } catch {
           if (epoch === refreshEpoch && !switchingClient) {
             status.textContent = '服务待连接';
@@ -171,6 +262,21 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
       activeRefresh = null;
     });
     return activeRefresh;
+  }
+
+  async function refreshControllerOnOpen() {
+    if (switchingClient) return;
+    if (activeRefresh) {
+      await activeRefresh;
+      return;
+    }
+    const epoch = refreshEpoch;
+    const expectedClient = syncedClient;
+    const result = await fetchControllerOnce(epoch);
+    if (!result?.ok || epoch !== refreshEpoch || switchingClient) return;
+    if (result.data?.client && result.data.client !== syncedClient) return;
+    if (expectedClient && syncedClient !== expectedClient) return;
+    applyControllerDetails(result.data, false);
   }
 
   function saveUrlDraft() {
@@ -186,8 +292,7 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
     }
     return runControllerMutation(async () => {
       if (targetClient !== syncedClient || switchingClient) return true;
-      const latestUrl = controllerUrl.value.trim();
-      const submittedUrl = latestUrl !== lastSavedUrl ? latestUrl : nextUrl;
+      const submittedUrl = controllerUrl.value.trim();
       if (submittedUrl === lastSavedUrl) {
         urlDirty = false;
         controllerUrl.value = lastSavedUrl;
@@ -195,16 +300,16 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
         return true;
       }
       controllerSaving = true;
+      const savedVersion = urlDraftVersion;
       renderControllerMeta();
       refreshEpoch += 1;
       try {
         await post('/api/proxy/controller', { client: targetClient, url: submittedUrl });
-        if (targetClient === syncedClient) {
-          lastSavedUrl = submittedUrl;
-          urlDirty = controllerUrl.value.trim() !== submittedUrl;
+        if (targetClient === syncedClient && urlDraftVersion === savedVersion) {
+          urlDirty = false;
           controllerUrl.removeAttribute('aria-invalid');
         }
-        showToast(submittedUrl ? '外部控制器地址已保存' : '已切换为自动读取本机控制器', 'success');
+        showToast(submittedUrl ? '外部控制器 API 已保存' : '已恢复自动读取 API', 'success');
         return true;
       } catch (error) {
         if (targetClient === syncedClient) {
@@ -216,7 +321,7 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
       } finally {
         controllerSaving = false;
         renderControllerMeta();
-        await refresh();
+        if (!pendingClientSwitch) await refresh();
       }
     });
   }
@@ -226,40 +331,46 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
     const targetClient = draftClient;
     const nextSecret = controllerSecret.value;
     if (targetClient !== syncedClient) return Promise.resolve(true);
-    if (!nextSecret) {
+    if (nextSecret === '') {
+      secretDirty = false;
+      controllerSecret.removeAttribute('aria-invalid');
+      controllerSecret.value = lastSavedSecret;
+      return Promise.resolve(true);
+    }
+    if (nextSecret === lastSavedSecret) {
       secretDirty = false;
       controllerSecret.removeAttribute('aria-invalid');
       return Promise.resolve(true);
     }
     return runControllerMutation(async () => {
       if (targetClient !== syncedClient || switchingClient) return true;
-      const latestSecret = controllerSecret.value || nextSecret;
-      if (!latestSecret) {
+      const submittedSecret = controllerSecret.value;
+      if (submittedSecret === '') {
+        secretDirty = false;
+        controllerSecret.removeAttribute('aria-invalid');
+        controllerSecret.value = lastSavedSecret;
+        return true;
+      }
+      if (submittedSecret === lastSavedSecret) {
         secretDirty = false;
         controllerSecret.removeAttribute('aria-invalid');
         return true;
       }
       controllerSaving = true;
+      const savedVersion = secretDraftVersion;
       renderControllerMeta();
       refreshEpoch += 1;
       try {
         await post('/api/proxy/controller', {
           client: targetClient,
-          url: lastSavedUrl,
-          secret: latestSecret
+          url: urlOverride,
+          secret: submittedSecret
         });
-        if (targetClient === syncedClient) {
-          secretSet = true;
-          if (controllerSecret.value === latestSecret) {
-            secretDirty = false;
-            controllerSecret.value = '';
-            controllerSecret.removeAttribute('aria-invalid');
-            resetSecretVisibility();
-          } else {
-            secretDirty = controllerSecret.value.length > 0;
-          }
+        if (targetClient === syncedClient && secretDraftVersion === savedVersion) {
+          secretDirty = false;
+          controllerSecret.removeAttribute('aria-invalid');
         }
-        showToast('外部控制器访问密钥已保存', 'success');
+        showToast('外部控制器密钥已保存', 'success');
         return true;
       } catch (error) {
         if (targetClient === syncedClient) {
@@ -271,38 +382,41 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
       } finally {
         controllerSaving = false;
         renderControllerMeta();
-        await refresh();
+        if (!pendingClientSwitch) await refresh();
       }
     });
   }
 
-  function clearManualSecret() {
-    if (!controllerClearSecret || switchingClient) return Promise.resolve(true);
+  function resetToAutomatic() {
+    resetPointerDown = false;
+    if (!controllerReset || switchingClient) return Promise.resolve(true);
     const targetClient = syncedClient;
     return runControllerMutation(async () => {
       if (targetClient !== syncedClient || switchingClient) return true;
       controllerSaving = true;
+      urlDraftVersion += 1;
+      secretDraftVersion += 1;
+      const savedUrlVer = urlDraftVersion;
+      const savedSecretVer = secretDraftVersion;
       renderControllerMeta();
       refreshEpoch += 1;
-      const clearingDraft = controllerSecret?.value || '';
       try {
         await post('/api/proxy/controller', {
           client: targetClient,
-          url: lastSavedUrl,
+          url: '',
           clear_secret: true
         });
         if (targetClient === syncedClient) {
-          secretSet = false;
-          if (controllerSecret && controllerSecret.value === clearingDraft) {
+          if (urlDraftVersion === savedUrlVer) {
+            urlDirty = false;
+            controllerUrl?.removeAttribute('aria-invalid');
+          }
+          if (secretDraftVersion === savedSecretVer) {
             secretDirty = false;
-            controllerSecret.value = '';
-            controllerSecret.removeAttribute('aria-invalid');
-            resetSecretVisibility();
-          } else {
-            secretDirty = Boolean(controllerSecret?.value);
+            controllerSecret?.removeAttribute('aria-invalid');
           }
         }
-        showToast('已清除手动密钥', 'success');
+        showToast('已恢复自动读取', 'success');
         return true;
       } catch (error) {
         showToast(error.message, 'error');
@@ -310,10 +424,29 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
       } finally {
         controllerSaving = false;
         renderControllerMeta();
-        await refresh();
+        if (!pendingClientSwitch) await refresh();
       }
     });
   }
+
+  initProxyGuide({
+    getClient: () => syncedClient || client.value || 'clash-verge',
+    onConfigure: async guideClient => {
+      if (!controllerDetails) return;
+      if (guideClient && guideClient !== syncedClient) {
+        client.value = guideClient;
+        if (!(await switchClient(guideClient))) return;
+      }
+      const wasOpen = controllerDetails.open;
+      if (!wasOpen) {
+        controllerDetails.open = true;
+      } else {
+        refreshControllerOnOpen();
+      }
+      scrollControllerIntoView();
+      controllerUrl?.focus({ preventScroll: true });
+    }
+  });
 
   if (controllerUrl) {
     controllerUrl.addEventListener('focus', () => {
@@ -321,7 +454,8 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
     });
     controllerUrl.addEventListener('input', () => {
       draftClient = syncedClient;
-      urlDirty = controllerUrl.value.trim() !== lastSavedUrl;
+      urlDraftVersion += 1;
+      urlDirty = controllerSaving || controllerUrl.value.trim() !== lastSavedUrl;
       controllerUrl.removeAttribute('aria-invalid');
     });
     controllerUrl.addEventListener('keydown', event => {
@@ -330,7 +464,8 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
         controllerUrl.blur();
       }
     });
-    controllerUrl.addEventListener('blur', () => {
+    controllerUrl.addEventListener('blur', event => {
+      if (event.relatedTarget === controllerReset || resetPointerDown) return;
       if (urlDirty || controllerUrl.value.trim() !== lastSavedUrl) {
         if (!urlDirty) draftClient = syncedClient;
         saveUrlDraft();
@@ -344,7 +479,8 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
     });
     controllerSecret.addEventListener('input', () => {
       draftClient = syncedClient;
-      secretDirty = controllerSecret.value.length > 0;
+      secretDraftVersion += 1;
+      secretDirty = controllerSaving || controllerSecret.value !== lastSavedSecret;
       controllerSecret.removeAttribute('aria-invalid');
     });
     controllerSecret.addEventListener('keydown', event => {
@@ -354,50 +490,35 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
       }
     });
     controllerSecret.addEventListener('blur', event => {
-      if (event.relatedTarget === controllerSecretToggle) return;
-      if (secretDirty || controllerSecret.value.length > 0) {
+      if (event.relatedTarget === controllerReset || resetPointerDown) return;
+      if (controllerSecret.value === '') {
+        secretDirty = false;
+        controllerSecret.removeAttribute('aria-invalid');
+        controllerSecret.value = lastSavedSecret;
+        return;
+      }
+      if (secretDirty || controllerSecret.value !== lastSavedSecret) {
         if (!secretDirty) draftClient = syncedClient;
         saveSecretDraft();
       }
     });
   }
 
-  if (controllerSecretToggle) {
-    controllerSecretToggle.addEventListener('mousedown', event => {
-      if (document.activeElement === controllerSecret) event.preventDefault();
-    });
-    controllerSecretToggle.addEventListener('click', () => {
-      if (togglePasswordInput) {
-        togglePasswordInput(controllerSecret, controllerSecretToggle);
-      } else if (controllerSecret) {
-        controllerSecret.type = controllerSecret.type === 'password' ? 'text' : 'password';
+  if (controllerReset) {
+    controllerReset.addEventListener('pointerdown', () => {
+      if (document.activeElement === controllerUrl || document.activeElement === controllerSecret) {
+        resetPointerDown = true;
+        window.addEventListener('pointerup', () => setTimeout(() => { resetPointerDown = false; }, 0), { once: true });
       }
     });
-    controllerSecretToggle.addEventListener('blur', event => {
-      if (event.relatedTarget === controllerSecret) return;
-      if (secretDirty) saveSecretDraft();
-    });
-  }
-
-  if (controllerClearSecret) {
-    controllerClearSecret.addEventListener('click', clearManualSecret);
+    controllerReset.addEventListener('click', resetToAutomatic);
   }
 
   if (controllerDetails) {
     controllerDetails.addEventListener('toggle', () => {
       if (controllerDetails.open) {
-        const card = controllerDetails.closest('.proxy-card');
-        if (card && card.scrollHeight > card.clientHeight) {
-          const reduced =
-            typeof window.matchMedia === 'function' &&
-            window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-          const targetTop =
-            card.scrollTop +
-            controllerDetails.getBoundingClientRect().top -
-            card.getBoundingClientRect().top -
-            10;
-          card.scrollTo({ top: Math.max(0, targetTop), behavior: reduced ? 'auto' : 'smooth' });
-        }
+        scrollControllerIntoView();
+        refreshControllerOnOpen();
       } else if (!controllerSavePromise) {
         if (urlDirty && !controllerUrl?.hasAttribute('aria-invalid')) saveUrlDraft();
         if (secretDirty && !controllerSecret?.hasAttribute('aria-invalid')) saveSecretDraft();
@@ -420,43 +541,39 @@ export function initProxy({ apiRequest, showToast, onClientChanged, togglePasswo
     }
   });
 
-  client.addEventListener('change', async () => {
-    const nextClient = client.value;
+  async function switchClient(nextClient) {
+    if (pendingClientSwitch || switchingClient) return false;
+    if (nextClient === syncedClient) return true;
     client.disabled = true;
-    await waitPendingControllerSave();
-    switchingClient = true;
-    renderControllerMeta();
+    pendingClientSwitch = true;
     try {
-      urlDirty = false;
-      secretDirty = false;
-      lastSavedUrl = '';
-      secretSet = false;
+      if (!(await waitPendingControllerSave())) {
+        client.value = syncedClient;
+        return false;
+      }
+      switchingClient = true;
+      renderControllerMeta();
+      clearDraftsAndFields(nextClient);
       syncedClient = nextClient;
-      draftClient = nextClient;
-      if (controllerUrl) {
-        controllerUrl.value = '';
-        controllerUrl.removeAttribute('aria-invalid');
-      }
-      if (controllerSecret) {
-        controllerSecret.value = '';
-        controllerSecret.removeAttribute('aria-invalid');
-        resetSecretVisibility();
-      }
       refreshEpoch += 1;
       await post('/api/proxy/client', { client: nextClient });
       group.replaceChildren(new Option('未选择', ''));
       await onClientChanged?.();
       showToast('已切换代理客户端', 'success');
+      return true;
     } catch (error) {
       syncedClient = '';
       showToast(error.message, 'error');
+      return false;
     } finally {
+      pendingClientSwitch = false;
       switchingClient = false;
       client.disabled = false;
       renderControllerMeta();
       await refresh();
     }
-  });
+  }
+  client.addEventListener('change', () => switchClient(client.value));
 
   check.addEventListener('click', async () => {
     check.disabled = true;

@@ -196,6 +196,18 @@ class ApiTests(unittest.TestCase):
         for private in ("sample-user", "sample-secret", "sample-private-wifi", str(self.store.root)):
             self.assertNotIn(private, diagnostic)
 
+    def test_plain_controller_settings_require_token_and_never_enter_status_or_diagnostics(self):
+        self.assertEqual(self.call('/api/proxy/controller', {'client':'clash-verge',
+            'url':'http://127.0.0.1:9097','secret':'fixture-controller-key'})[0], 200)
+        for headers in ({'X-NJUST-Token':''}, {'Origin':'https://other.test'}, {'Sec-Fetch-Site':'cross-site'}):
+            self.assertEqual(self.call('/api/proxy/controller', headers=headers)[0], 403)
+        code, settings = self.call('/api/proxy/controller')
+        self.assertEqual(code, 200)
+        self.assertEqual(settings['url'], 'http://127.0.0.1:9097')
+        self.assertEqual(settings['secret'], 'fixture-controller-key')
+        for path in ('/api/status','/api/proxy','/api/diagnostics','/api/logs'):
+            self.assertNotIn('fixture-controller-key', json.dumps(self.call(path)[1]))
+
     def test_explicit_credentials_view_requires_local_token_and_never_exports_secrets(self):
         self.call('/api/config', {'username': 'fixture-account', 'password': 'fixture-password',
             'fallback_networks': [{'ssid': 'private-fallback', 'password': 'wifi-private-pass'}]})

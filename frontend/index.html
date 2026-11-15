@@ -394,16 +394,16 @@
               <div class="proxy-actions"><label class="glass-check-item"><input id="proxy-fail-open" type="checkbox" class="glass-checkbox"><span>代理出口异常时关闭系统代理和 TUN</span></label><button id="proxy-check" type="button" class="btn-glass-action btn-sm">检测出口</button><button id="proxy-restore" type="button" class="btn-glass-action btn-sm" disabled>恢复代理</button></div>
               <div class="proxy-actions"><label for="proxy-client">客户端</label><select id="proxy-client" class="glass-input"><option value="clash-verge">Clash Verge</option><option value="flclash">FlClash</option></select><button id="proxy-detect" type="button" class="btn-glass-action btn-sm">连接客户端</button></div>
               <div class="proxy-actions"><label for="proxy-group">守护代理组</label><select id="proxy-group" class="glass-input"><option value="">未选择</option></select></div>
-              <p id="proxy-egress" class="proxy-note">出口随客户端当前选择检测，守护代理组用于程序分流。</p>
+              <p id="proxy-egress" class="proxy-note" hidden></p>
 
               <details id="proxy-controller-details" class="proxy-controller-details">
                 <summary class="proxy-controller-summary">
                   <span class="proxy-controller-summary-left">
                     <span class="summary-accent" aria-hidden="true"></span>
-                    <span>外部控制配置</span>
+                    <span>外部控制器</span>
                   </span>
                   <span class="proxy-controller-summary-right">
-                    <span id="proxy-controller-mode" class="glass-pill pill-subtle">自动读取</span>
+                    <span id="proxy-controller-mode" class="glass-pill pill-subtle">自动</span>
                     <svg class="summary-chevron" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <polyline points="6 9 12 15 18 9"/>
                     </svg>
@@ -412,28 +412,14 @@
                 <div class="proxy-controller-body">
                   <div class="proxy-controller-grid">
                     <div class="field-slot">
-                      <label for="proxy-controller-url" class="slot-label">控制器地址 (URL)</label>
-                      <input id="proxy-controller-url" type="text" class="glass-input" placeholder="留空自动读取（如 http://127.0.0.1:9090）" autocomplete="off" spellcheck="false">
+                      <label for="proxy-controller-url" class="slot-label">API</label>
+                      <input id="proxy-controller-url" type="text" class="glass-input" placeholder="http://127.0.0.1:9097" autocomplete="off" spellcheck="false">
                     </div>
                     <div class="field-slot">
-                      <label for="proxy-controller-secret" class="slot-label">访问密钥 (Secret)</label>
-                      <div class="password-input-group">
-                        <input id="proxy-controller-secret" type="password" class="glass-input input-with-toggle" placeholder="留空保持已有 / 自动读取" autocomplete="off" spellcheck="false">
-                        <button id="proxy-controller-secret-toggle" type="button" class="btn-toggle-eye" aria-label="显示访问密钥" aria-pressed="false" title="显示/隐藏访问密钥" data-password-label="访问密钥">
-                          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" class="eye-icon" aria-hidden="true">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                            <circle cx="12" cy="12" r="3"></circle>
-                          </svg>
-                        </button>
-                      </div>
+                      <label for="proxy-controller-secret" class="slot-label">密钥</label>
+                      <input id="proxy-controller-secret" type="text" class="glass-input" autocomplete="off" spellcheck="false">
                     </div>
-                  </div>
-                  <div class="proxy-controller-foot">
-                    <div class="proxy-controller-hints">
-                      <span id="proxy-controller-secret-state" class="glass-pill pill-subtle">未设置手动密钥</span>
-                      <span class="proxy-controller-tip">留空地址自动读取客户端本机配置，失焦自动保存</span>
-                    </div>
-                    <button id="proxy-controller-clear-secret" type="button" class="btn-glass-action btn-xs btn-warn-text" disabled>清除手动密钥</button>
+                    <button id="proxy-controller-reset" type="button" class="btn-glass-action btn-sm proxy-controller-reset">自动读取</button>
                   </div>
                 </div>
               </details>
@@ -580,7 +566,7 @@
       <div class="modal-head">
         <div class="guide-head-title-wrap">
           <h3 id="proxy-guide-title" class="modal-title">外部控制配置教程</h3>
-          <span id="proxy-guide-step-badge" class="glass-pill guide-step-badge">步骤 1 / 2</span>
+          <span id="proxy-guide-step-badge" class="glass-pill guide-step-badge">步骤 1 / 3</span>
         </div>
         <button id="proxy-guide-close" class="modal-close-btn" type="button" aria-label="关闭教程">&times;</button>
       </div>
@@ -608,13 +594,13 @@
             </span>
           </button>
         </div>
-        <p class="guide-note-box">说明：出口检测走外部控制，开关交给客户端；请保持客户端运行且权限一致。本软件仅连接本机 127.0.0.1（FlClash 默认 9090 端口），密钥自行设置；后端访问无需 CORS。</p>
       </div>
 
       <div class="guide-footer">
         <div id="proxy-guide-dots" class="guide-dots" aria-hidden="true"></div>
         <div class="guide-footer-actions">
           <button id="proxy-guide-prev" type="button" class="btn-glass-action btn-sm">上一页</button>
+          <button id="proxy-guide-go" type="button" class="btn-glass-action btn-sm guide-go-btn" hidden>去配置</button>
           <button id="proxy-guide-next" type="button" class="btn-espresso btn-sm">下一页</button>
         </div>
       </div>
@@ -636,7 +622,6 @@
       <div id="proxy-guide-zoom-stage" class="guide-zoom-stage">
         <img id="proxy-guide-zoom-img" class="guide-zoom-img" src="guide/verge-settings.webp" alt="">
       </div>
-      <p class="guide-zoom-tip">点击图片可切换细节放大，按 Esc 或点击遮罩返回步骤</p>
     </div>
   </dialog>
 

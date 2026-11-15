@@ -21,7 +21,8 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/logo.webp": ("logo.webp", "image/webp")}
 ASSETS.update({"/proxy-guide.js":("proxy-guide.js","text/javascript; charset=utf-8"),
                "/proxy-guide.css":("proxy-guide.css","text/css; charset=utf-8")})
-for _image in ('verge-settings','verge-controller','flclash-settings','flclash-controller'):
+for _image in ('verge-settings','verge-controller','flclash-settings','flclash-controller',
+               'njust-controller-verge','njust-controller-flclash'):
     ASSETS['/guide/'+_image+'.webp']=('guide/'+_image+'.webp','image/webp')
 MAX_BODY = 16384
 
@@ -121,6 +122,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, service.updater.status())
         elif self.path == "/api/proxy":
             self.send(200, service.proxy.status() | {'enabled':service.store.settings['proxy_fail_open']})
+        elif self.path == "/api/proxy/controller":
+            self.send(200, service.proxy.controller_view())
         elif self.path == "/api/proxy/groups":
             try:
                 self.send(200, {'groups':service.proxy.groups()})
