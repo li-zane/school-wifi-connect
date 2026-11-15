@@ -117,6 +117,24 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.manager.install()
 
 
+class UpdateInstallerTests(unittest.TestCase):
+    def test_installer_restore_never_rolls_back_a_finished_update(self):
+        # The new backend can be mid-cycle right after boot, so /api/start may
+        # answer 400. That restore must stay outside the rollback path.
+        script = (Path(__file__).resolve().parents[1] / 'scripts/apply-update.ps1').read_text('utf-8-sig')
+        restore = script.index("$operation = if ($p.was_running)")
+        self.assertGreater(script.index('catch { }', restore), restore)  # never escapes to the rollback
+        # -File ignores the caller's preference: a failed body must exit non-zero
+        # and still write its result, or the scheduler record shows a silent success.
+        self.assertIn('trap {', script[:script.index('$p =')])
+        self.assertIn('exit 1', script[:script.index('$p =')])
+        path_guard = script.index("Result 'error' $hint 'Invalid install directory'")
+        self.assertLess(script.index('function Result'), path_guard)
+        self.assertLess(path_guard, script.index('$swapped = $false'))
+        self.assertNotIn("@{state='updated'", script)
+        self.assertEqual(script.count("Result 'updated' '更新完成'"), 1)
+
+
 class UpdateApiTests(unittest.TestCase):
     def test_update_routes_require_session_and_install_respects_busy_state(self):
         from njust_wifi.service import Service

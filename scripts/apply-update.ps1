@@ -1,6 +1,14 @@
 ﻿param([Parameter(Mandatory=$true)][string]$Plan)
 $ErrorActionPreference = 'Stop'
+# -File runs in a fresh session that ignores the caller's preference, and a
+# terminating error in the body still exits 0. Report every outcome and set the
+# exit code so the scheduler record matches update-result.json.
+trap { $_ | Out-String | Write-Error; exit 1 }
 $p = Get-Content -LiteralPath $Plan -Raw -Encoding UTF8 | ConvertFrom-Json
+$resultPath = Join-Path ([IO.Path]::GetFullPath($p.data_root)) 'update-result.json'
+function Result([string]$State, [string]$Message, $Detail) {
+    @{state=$State; version=$p.expected_version; message=$Message; detail=$Detail} | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8
+}
 $install = [IO.Path]::GetFullPath($p.install_root).TrimEnd('\')
 $stage = [IO.Path]::GetFullPath($p.stage).TrimEnd('\')
 $backup = [IO.Path]::GetFullPath($p.backup).TrimEnd('\')
@@ -12,15 +20,18 @@ if ((Split-Path -Parent $stage) -ne $parent -or (Split-Path -Parent $backup) -ne
     $install -eq [IO.Path]::GetPathRoot($install) -or $stage -eq $install -or $backup -eq $install -or
     $data -eq $install -or $data.StartsWith($install + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid update paths' }
 foreach ($dir in @($install,$stage)) {
-    $item = Get-Item -LiteralPath $dir
-    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Invalid install directory' }
+    $item = Get-Item -LiteralPath $dir -ErrorAction SilentlyContinue
+    if (-not $item -or -not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        $hint = if ($dir -eq $stage) { '更新暂存目录不存在，请重新下载' } else { '安装目录不可用，请重新打开原版本' }
+        Result 'error' $hint 'Invalid install directory'
+        throw 'Invalid install directory'
+    }
 }
 $swapped = $false
 $moved = $false
 $stopped = $false
 $monitorTask = $null
 $desktopTask = $null
-$resultPath = Join-Path $data 'update-result.json'
 
 function Stop-App {
     foreach ($name in @('NJUSTWiFi.exe','NJUSTWiFiWindow.exe','NJUSTWiFiBackend.exe')) {
@@ -65,14 +76,18 @@ function Start-App([string]$Expected) {
     if (-not (Health $Expected)) { throw 'Updated backend health check failed' }
     # Preserve pause/start state without changing stored startup preferences.
     if (-not $p.demo) {
+        # The new backend may already be mid-cycle right after boot; a rejected
+        # pause/start restore must never roll back an installed update.
         $origin = 'http://127.0.0.1:' + $p.port
         $client = New-Object Net.WebClient; $client.Proxy = $null
         try {
-            $session = $client.DownloadString($origin+'/api/session') | ConvertFrom-Json
-            $client.Headers['X-NJUST-Token'] = $session.token
-            $client.Headers['Content-Type'] = 'application/json'
-            $operation = if ($p.was_running) { '/api/start' } else { '/api/stop' }
-            $null = $client.UploadString($origin+$operation,'POST','{}')
+            try {
+                $session = $client.DownloadString($origin+'/api/session') | ConvertFrom-Json
+                $client.Headers['X-NJUST-Token'] = $session.token
+                $client.Headers['Content-Type'] = 'application/json'
+                $operation = if ($p.was_running) { '/api/start' } else { '/api/stop' }
+                $null = $client.UploadString($origin+$operation,'POST','{}')
+            } catch { } # Monitoring state is preserved by settings; never fatal here.
         } finally { $client.Dispose() }
         if ($desktopTask) { Start-ScheduledTask -TaskName $desktopTask }
         else { Start-Process -FilePath (Join-Path $install 'NJUSTWiFi.exe') -WorkingDirectory $install -WindowStyle Hidden }
@@ -107,7 +122,7 @@ try {
     Move-Item -LiteralPath $stage -Destination $install
     $swapped = $true
     Start-App $p.expected_version
-    @{state='updated';version=$p.expected_version;message='更新完成'} | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8
+    Result 'updated' '更新完成'
 } catch {
     $failed = $_.Exception.Message
     try {
@@ -115,9 +130,9 @@ try {
         if ($swapped) { Move-Item -LiteralPath $install -Destination $stage }
         if ($moved) { Move-Item -LiteralPath $backup -Destination $install }
         if ($stopped) { Start-App '' }
-        @{state='rolled_back';message='更新未完成，已恢复原版本';detail=$failed} | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8
+        Result 'rolled_back' '更新未完成，已恢复原版本' $failed
     } catch {
-        @{state='error';message='更新未完成，请重新打开原版本';detail=$failed} | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8
+        Result 'error' '更新未完成，请重新打开原版本' $failed
     }
 } finally {
     if (-not $p.demo -and $p.task_name -match '^NjustWifiUpdate[a-f0-9]{12}$') {
