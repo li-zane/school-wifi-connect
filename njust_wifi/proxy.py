@@ -653,11 +653,20 @@ class ProxyProtection:
         if path.exists():
             saved=self._snapshot()
         else:
-            gui=self.switches.read()
             config=self.controller.request('GET','/configs')
             system=self.system_proxy()
             port=int(config.get('mixed-port',0))
             other_proxy=system['ProxyEnable']==1 and not self._owns_proxy(system,port)
+            try:
+                # Saved switches and live state agree there is nothing to close:
+                # do not show or navigate the client window on every failed tick.
+                flags=self._client_flags()
+                if not (flags['tun'] or config.get('tun',{}).get('enable') or self._owns_proxy(system,port)
+                        or (flags['proxy'] and not other_proxy)):
+                    return False
+            except (OSError,ValueError,TypeError,AttributeError,KeyError):
+                pass
+            gui=self.switches.read()
             fields=[key for key in ('tun','proxy') if gui[key] and (key!='proxy' or not other_proxy)]
             if not fields:
                 if bool(config.get('tun',{}).get('enable')):
@@ -784,11 +793,16 @@ class ProxyProtection:
                         except SwitchStateError:
                             # A verified manual restore retires the old record; a
                             # partial or stale indicator needs explicit user repair.
-                            gui=self.switches.read()
-                            if not all(gui[k]==saved['original'][k] for k in saved['fields']):
+                            # Saved switches and live state decide first, so an unresolved
+                            # record does not operate the client window on every tick.
+                            flags=self._client_flags()
+                            if not all(flags[k]==saved['original'][k] for k in saved['fields']):
                                 raise SwitchStateError('恢复记录与客户端状态不一致，请点击恢复代理')
                             for field in saved['fields']:
                                 self._verify_switch(field,saved['original'][field],saved,wait=False)
+                            gui=self.switches.read()
+                            if not all(gui[k]==saved['original'][k] for k in saved['fields']):
+                                raise SwitchStateError('恢复记录与客户端状态不一致，请点击恢复代理')
                             record.unlink()
                             self.failures=0; self.state='restored'; self.message='客户端已手动恢复，继续检测出口'; return
                         self.state='direct'; self.message='客户端已关闭代理，等待手动恢复'; return

@@ -16,6 +16,10 @@ public static class ProxyClientBridge {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr handle, StringBuilder text, int count);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr handle);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr handle, int command);
+    [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint id);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("advapi32.dll")] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll")] static extern bool GetTokenInformation(IntPtr token, int kind, out int value, int size, out int length);
     static string Compact(string text) { return String.Concat((text ?? "").Where(c => !Char.IsWhiteSpace(c))); }
     static bool Label(string text, string[] labels) {
         // FlClash dashboard buttons append the current state on a second line.
@@ -80,6 +84,11 @@ public static class ProxyClientBridge {
             buttons=Elements(root).Where(e=>e.Current.ControlType==ControlType.Text && names.Contains(Compact(e.Current.Name)))
                 .Select(e=>Walker.GetParent(e)).Where(e=>e!=null && e.Current.ControlType==ControlType.Button).ToArray();
         }
+        if(buttons.Length>1) {
+            // Verge's home page repeats "设置" inside a card; the sidebar entry is the list item.
+            var navigation=buttons.Where(e=>{ var parent=Walker.GetParent(e); return parent!=null && parent.Current.ControlType==ControlType.ListItem; }).ToArray();
+            if(navigation.Length==1) buttons=navigation;
+        }
         if(buttons.Length!=1 || !buttons[0].Current.IsEnabled) return false;
         object value;
         if(!buttons[0].TryGetCurrentPattern(InvokePattern.Pattern,out value)) return false;
@@ -121,7 +130,19 @@ public static class ProxyClientBridge {
             return true;
         },IntPtr.Zero);
         if(windows.Count!=1) throw new InvalidOperationException("client window unavailable");
+        // UIPI hides an elevated client's controls from a standard-rights bridge.
+        uint owner; GetWindowThreadProcessId(windows[0],out owner);
+        if(Elevated(owner)==true && Elevated((uint)Process.GetCurrentProcess().Id)==false) throw new InvalidOperationException("client elevated");
         return windows[0];
+    }
+    static bool? Elevated(uint id) {
+        IntPtr process=OpenProcess(0x1000,false,id), token;
+        if(process==IntPtr.Zero) return null;
+        try {
+            if(!OpenProcessToken(process,8,out token)) return null;
+            try { int value,length; return GetTokenInformation(token,20,out value,4,out length) ? value!=0 : (bool?)null; }
+            finally { CloseHandle(token); }
+        } finally { CloseHandle(process); }
     }
     [STAThread] public static int Main(string[] args) {
         Console.OutputEncoding=new UTF8Encoding(false);
@@ -151,6 +172,8 @@ public static class ProxyClientBridge {
                 case "client window unavailable": code="window_unavailable"; break;
                 case "client dialog open": code="dialog_open"; break;
                 case "switch unavailable or ambiguous": code="switch_unavailable"; break;
+                case "client elevated": code="client_elevated"; break;
+                case "settings unavailable": case "tools unavailable":
                 case "network settings unavailable": code="settings_unavailable"; break;
                 case "switch disabled": code="switch_disabled"; break;
                 case "state changed": code="state_changed"; break;

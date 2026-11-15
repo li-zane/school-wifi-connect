@@ -45,6 +45,7 @@ class ClientSwitches:
                                     capture_output=True, timeout=20, creationflags=0x08000000)
             reply = json.loads(result.stdout.decode('utf-8-sig'))
             messages = {'window_unavailable':'未找到代理客户端窗口，请保持客户端运行',
+                        'client_elevated':'代理客户端正以管理员身份运行，无法操作其开关；请以普通权限启动客户端',
                         'dialog_open':'代理客户端有设置弹窗，请关闭弹窗后重试',
                         'switch_unavailable':'未找到唯一的代理开关，请检查客户端版本和界面',
                         'settings_unavailable':'客户端网络设置页面尚未就绪',

@@ -80,5 +80,46 @@ class ProxyRepairTests(unittest.TestCase):
         self.switches.set.assert_not_called()
         self.assertEqual(self.registry['ProxyServer'], '127.0.0.1:9999')
 
+    def test_bad_exit_with_client_switches_off_never_operates_client_window(self):
+        self.gui.update(proxy=False, tun=False)
+        self.registry['ProxyEnable'] = 0
+        self.config['tun']['enable'] = False
+        self.write_client_flags()
+        self.proxy.proxy_healthy = Mock(return_value=False)
+        self.proxy.direct_healthy = Mock(return_value=True)
+        for _ in range(5):
+            self.proxy.tick(threading.Event(), Mock())
+        self.assertEqual(self.proxy.state, 'idle')
+        self.switches.read.assert_not_called()
+        self.assertFalse(self.proxy.recovery_path.exists())
+
+    def test_stale_saved_switch_still_reaches_the_client_for_fail_open(self):
+        (self.controller.root/'verge.yaml').write_text('enable_system_proxy: false\nenable_tun_mode: false\n')
+        self.assertTrue(self.proxy.fail_open())
+        self.assertEqual(self.gui, {'proxy': False, 'tun': False})
+
+    def test_unresolved_record_is_reported_without_operating_client_each_tick(self):
+        self.proxy.fail_open()
+        self.gui['tun'] = True
+        self.config['tun']['enable'] = True
+        self.write_client_flags()
+        self.switches.read.reset_mock()
+        for _ in range(3):
+            self.proxy.tick(threading.Event(), Mock())
+        self.assertEqual(self.proxy.message, '恢复记录与客户端状态不一致，请点击恢复代理')
+        self.switches.read.assert_not_called()
+        self.assertTrue(self.proxy.recovery_path.exists())
+
+    def test_elevated_client_is_reported_with_its_own_message(self):
+        from njust_wifi.client_control import ClientControlError, ClientSwitches
+        from unittest.mock import patch
+        subject = ClientSwitches(self.root, 'flclash')
+        subject._executable = Mock(return_value='bridge.exe')
+        reply = Mock(returncode=1, stdout=b'{"ok":false,"error":"client_elevated"}')
+        with patch('njust_wifi.client_control.subprocess.run', return_value=reply):
+            with self.assertRaises(ClientControlError) as raised:
+                subject.read()
+        self.assertIn('管理员', str(raised.exception))
+
 if __name__ == '__main__':
     unittest.main()
