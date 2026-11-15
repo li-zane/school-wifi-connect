@@ -50,9 +50,11 @@ internal sealed class TrayContext : ApplicationContext
     {
         this.port = port;
         string all = "", backend = "";
+        bool background = false;
         for (int i = 0; i < args.Length; i++)
         {
             string item = args[i];
+            if (item == "--background") { background = true; continue; }
             all += " " + Quote(item);
             if (item != "--qa-report") backend += " " + Quote(item);
             else if (i + 1 < args.Length) all += " " + Quote(args[++i]);
@@ -86,11 +88,13 @@ internal sealed class TrayContext : ApplicationContext
         exitWait = ThreadPool.RegisterWaitForSingleObject(exitSignal, (s, timedOut) => {
             try { invoker.BeginInvoke(new Action(ExitThread)); } catch (InvalidOperationException) { }
         }, null, Timeout.Infinite, false);
-        Open();
+        Open(background);
     }
 
     private static string Quote(string s) { return "\"" + s.Replace("\"", "") + "\""; }
     private void Open()
+    { Open(false); }
+    private void Open(bool background)
     {
         try
         {
@@ -100,7 +104,7 @@ internal sealed class TrayContext : ApplicationContext
                 return;
             }
             if (window != null) window.Dispose();
-            var start = new ProcessStartInfo(Path.Combine(root, "NJUSTWiFiWindow.exe"), arguments);
+            var start = new ProcessStartInfo(Path.Combine(root, "NJUSTWiFiWindow.exe"), arguments + (background ? " --background" : ""));
             start.UseShellExecute = false; start.WorkingDirectory = root;
             window = Process.Start(start);
             job.Add(window);

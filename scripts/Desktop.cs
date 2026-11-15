@@ -21,6 +21,7 @@ internal static class Program
     internal static string Extra = "";
     internal static int Port = 18089;
     internal static string QaReport;
+    internal static bool BackgroundStart;
 
     [STAThread]
     private static void Main(string[] args)
@@ -34,6 +35,7 @@ internal static class Program
             else if (args[i] == "--demo") Extra += " --demo";
             else if (args[i] == "--data-dir" && i + 1 < args.Length) Extra += " --data-dir " + Quote(args[++i]);
             else if (args[i] == "--qa-report" && i + 1 < args.Length) QaReport = args[++i];
+            else if (args[i] == "--background") BackgroundStart = true;
         }
         if (Port < 1024 || Port > 65535) return;
         Origin = "http://127.0.0.1:" + Port;
@@ -100,6 +102,19 @@ internal sealed class DesktopWindow : GlassWindow
     private RegisteredWaitHandle showWait;
     private bool initializing;
     private bool allowClose, exiting, pageReady;
+    private bool? maximized;
+    protected override bool ShowWithoutActivation { get { return Program.BackgroundStart; } }
+
+    private async void SyncWindowState()
+    {
+        if (view == null || view.CoreWebView2 == null) return;
+        bool value = WindowState == FormWindowState.Maximized;
+        if (maximized == value) return;
+        maximized = value;
+        try { await view.CoreWebView2.ExecuteScriptAsync("document.documentElement.classList.toggle('native-maximized'," + (value ? "true" : "false") + ")"); }
+        catch (InvalidOperationException) { }
+        catch (COMException) { }
+    }
 
     internal DesktopWindow()
     {
@@ -108,6 +123,7 @@ internal sealed class DesktopWindow : GlassWindow
         BackColor = Color.FromArgb(246, 249, 253);
         loading = new Label { Text = "正在启动…", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Microsoft YaHei UI", 12) };
         Content.Controls.Add(loading);
+        Resize += (s, e) => SyncWindowState();
         showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\NjustWifiShow" + Program.Port);
         Shown += async (s, e) => {
             showWait = ThreadPool.RegisterWaitForSingleObject(showSignal, (state, timedOut) => {
@@ -199,10 +215,11 @@ internal sealed class DesktopWindow : GlassWindow
                 try {
                     string message = e.TryGetWebMessageAsString();
                     if (message == "theme:dark" || message == "theme:light") SetChromeTheme(message == "theme:dark");
-                    else if (message == "window:ready") pageReady = true;
+                    else if (message == "window:ready") { pageReady = true; maximized = null; SyncWindowState(); }
                     else if (message == "window:minimize") WindowState = FormWindowState.Minimized;
                     else if (message == "window:maximize") ToggleMaximize();
                     else if (message == "window:drag") DragWindow();
+                    else if (message == "window:resize-bottom-right") ResizeBottomRight();
                     else if (message == "window:close") Close();
                     else if (message == "window:tray") ToTray();
                     else if (message == "window:exit") await ExitProgram();

@@ -22,6 +22,11 @@ internal class GlassWindow : Form
     }
     protected void DragWindow()
     { ReleaseCapture(); SendMessage(Handle, 0xA1, new IntPtr(2), IntPtr.Zero); }
+    protected void ResizeBottomRight()
+    {
+        if (WindowState != FormWindowState.Normal) return;
+        ReleaseCapture(); SendMessage(Handle, 0xA1, new IntPtr(17), IntPtr.Zero);
+    }
     protected void ToggleMaximize()
     {
         MaximizedBounds = Screen.FromControl(this).WorkingArea;
@@ -45,6 +50,10 @@ internal class GlassWindow : Form
             long position = m.LParam.ToInt64();
             Point p = PointToClient(new Point((short)(position & 0xffff), (short)((position >> 16) & 0xffff)));
             int edge = Math.Max(5, DeviceDpi * 5 / 96);
+            int corner = Math.Max(28, DeviceDpi * 28 / 96);
+            if (p.X >= ClientSize.Width - corner && p.Y >= ClientSize.Height - corner &&
+                p.X < ClientSize.Width && p.Y < ClientSize.Height)
+            { m.Result = new IntPtr(17); return; }
             bool left = p.X < edge, right = p.X >= Width - edge, top = p.Y < edge, bottom = p.Y >= Height - edge;
             int hit = top && left ? 13 : top && right ? 14 : bottom && left ? 16 : bottom && right ? 17 : left ? 10 : right ? 11 : top ? 12 : bottom ? 15 : 0;
             if (hit != 0) { m.Result = new IntPtr(hit); return; }

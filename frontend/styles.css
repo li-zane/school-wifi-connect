@@ -2005,6 +2005,8 @@ button, input, textarea {
 .brand-title { margin:0; font-size:18px; letter-spacing:-.4px; color:var(--text-heading); }
 .window-controls { display:flex; gap:2px; margin-left:6px; padding-left:8px; border-left:1px solid var(--glass-border); }
 .window-controls[hidden] { display:none; }
+.window-resize-corner { position:fixed; right:0; bottom:0; width:24px; height:24px; z-index:1100; cursor:nwse-resize; touch-action:none; user-select:none; }
+.native-maximized .window-resize-corner { display:none; }
 .window-controls button { width:32px; height:32px; padding:6px; border:0; border-radius:11px; color:var(--text-heading); background:transparent; cursor:pointer; }
 .window-controls button:hover { background:var(--blue-bg); }
 .window-controls #window-close:hover { background:var(--pink-bg); color:var(--pink-danger-ink); }

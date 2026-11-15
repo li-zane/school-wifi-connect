@@ -3,6 +3,15 @@ export function initWindow({apiRequest, showToast, flush}) {
   document.documentElement.classList.add('native-desktop');
   document.querySelector('.window-controls').hidden = false;
   const post = command => window.chrome.webview.postMessage(`window:${command}`);
+  const resizeCorner = document.createElement('div');
+  resizeCorner.className = 'window-resize-corner';
+  resizeCorner.setAttribute('aria-hidden', 'true');
+  resizeCorner.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || document.documentElement.classList.contains('native-maximized')) return;
+    event.preventDefault();
+    post('resize-bottom-right');
+  });
+  document.body.append(resizeCorner);
   post('ready');
   const modal = document.getElementById('modal-close');
   let closing = false;
