@@ -45,6 +45,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="NJUST WiFi — 本地自动登录")
     parser.add_argument("--serve", action="store_true", help="仅启动后台，不打开浏览器")
     parser.add_argument("--bootstrap", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--boot-manifest", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--stop-background", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--nogui", action="store_true", help="兼容旧版后台启动")
     parser.add_argument("--once", action="store_true", help="仅检测并恢复一次")
@@ -56,6 +57,9 @@ def main() -> int:
     parser.add_argument("--data-dir", type=Path, help="测试用独立数据目录")
     parser.add_argument("--port", type=int, default=PORT, help="仅供隔离测试；正式固定 18089")
     args = parser.parse_args()
+    if args.boot_manifest:
+        from njust_wifi.boot import main as boot_main
+        return boot_main(args.boot_manifest)
     args.serve = args.serve or args.nogui or args.from_startup
     url = f"http://127.0.0.1:{args.port}"
     if args.demo and args.data_dir is None:

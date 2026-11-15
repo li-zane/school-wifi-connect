@@ -62,8 +62,9 @@ def decode_console(value: bytes) -> str:
 
 
 class Network:
-    def __init__(self, cancel):
+    def __init__(self, cancel, *, all_users=False):
         self.cancel = cancel
+        self.all_users = all_users
         self.opener = automatic_opener(cancel)
         self.path_uncertain = False
         self.checks = PROBES
@@ -160,13 +161,19 @@ class Network:
     def connect(self, ssid: str, *, create_open: bool = False, password: str = "") -> None:
         self.active()
         if password:
-            install_profile(ssid, password)
+            if self.all_users:
+                install_profile(ssid, password, all_users=True)
+            else:
+                install_profile(ssid, password)
         try:
             self.netsh("connect", f"name={ssid}", f"ssid={ssid}")
         except RuntimeError:
             if not create_open:
                 raise
-            install_profile(ssid)
+            if self.all_users:
+                install_profile(ssid, all_users=True)
+            else:
+                install_profile(ssid)
             self.netsh("connect", f"name={ssid}", f"ssid={ssid}")
         if self.cancel.wait(6):
             raise InterruptedError()

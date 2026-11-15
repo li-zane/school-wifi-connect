@@ -215,7 +215,7 @@ def read_profile_passwords(ssids: list[str]) -> dict[str, str]:
     return result
 
 
-def install_profile(ssid: str, password: str = ""):
+def install_profile(ssid: str, password: str = "", *, all_users=False):
     if os.name != 'nt':
         raise RuntimeError("Wi-Fi 管理需要 Windows")
     wlan = ctypes.WinDLL('wlanapi', use_last_error=True)
@@ -238,8 +238,9 @@ def install_profile(ssid: str, password: str = ""):
             raise RuntimeError("未找到 Wi-Fi 网卡")
         items = (Interface * count).from_address(interfaces.value + 8)
         item = next((i for i in items if i.state == 1), items[0])
-        # WLAN_PROFILE_USER, overwrite only the explicitly configured SSID.
-        if wlan.WlanSetProfile(handle, ctypes.byref(item.guid), 2, profile_xml(ssid, password), None, True, None, ctypes.byref(reason)):
+        # Boot SYSTEM profiles must be available outside a user's logon session.
+        flags = 0 if all_users else 2  # all-user profile / WLAN_PROFILE_USER
+        if wlan.WlanSetProfile(handle, ctypes.byref(item.guid), flags, profile_xml(ssid, password), None, True, None, ctypes.byref(reason)):
             raise RuntimeError("Wi-Fi 密码配置失败，请检查网络加密类型")
     finally:
         if interfaces.value:

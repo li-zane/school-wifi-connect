@@ -19,6 +19,7 @@ from .balance import BalanceClient, BalanceUnavailable
 from .wlan import read_profile_passwords
 from .updater import UpdateManager
 from .proxy import ProxyProtection
+from .boot import network_lease
 
 TASK_NAME = "NjustWifiLocalMonitor"
 
@@ -43,6 +44,20 @@ def set_startup(enabled: bool) -> None:
     if not enabled:
         command.append("-NoLogon")
     try:
+        # The boot worker has a protected installed copy and requires one UAC
+        # confirmation. The interactive task remains responsible after login.
+        if getattr(sys, 'frozen', False):
+            setup = Path(sys.executable).with_name('Boot-Network.ps1')
+            if not setup.is_file():
+                raise ValueError('开机联网组件缺失，请完整解压新版桌面包')
+            exists = subprocess.run(['schtasks.exe', '/Query', '/TN', 'NjustWifiBootNetwork'],
+                                    capture_output=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0
+            if enabled or exists:
+                result = subprocess.run(command[:5] + ['-File', str(setup), '-Mode', 'Install' if enabled else 'Remove',
+                                        '-Executable', str(executable)], capture_output=True, timeout=150,
+                                        creationflags=subprocess.CREATE_NO_WINDOW)
+                if result.returncode:
+                    raise ValueError('开机联网设置已取消或未完成，请确认管理员提示后重试')
         result = subprocess.run(command, capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired):
         raise ValueError("开机启动设置失败，请重试") from None
@@ -430,7 +445,8 @@ class Service:
                 else:
                     self.guards.check(self.cancel, self.guard_event, self.health)
                     network = self.network_factory(self.cancel)
-                    network.recover(settings, username, password, self.event)
+                    with network_lease(self.cancel):
+                        network.recover(settings, username, password, self.event)
                     if settings['proxy_fail_open'] and not self.cancel.is_set():
                         self.event('checking', '正在检测当前代理出口')
                         # This network check already established WiFi connectivity.
