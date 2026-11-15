@@ -7,11 +7,43 @@ import subprocess
 import csv
 import io
 import sys
+import unicodedata
+from functools import lru_cache
 from .storage import atomic_write
 from .network import decode_console
 
 
 class ApplicationGuards:
+    @staticmethod
+    @lru_cache(maxsize=64)
+    def name(path):
+        # One bounded native metadata read per executable, no subprocess per poll.
+        name = path.stem
+        if os.name == 'nt':
+            try:
+                import ctypes
+                api = ctypes.WinDLL('version', use_last_error=True)
+                api.GetFileVersionInfoSizeW.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_uint)]
+                api.GetFileVersionInfoW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p]
+                api.VerQueryValueW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint)]
+                size = api.GetFileVersionInfoSizeW(str(path), None)
+                if 0 < size <= 1024 * 1024:
+                    buffer = ctypes.create_string_buffer(size)
+                    if api.GetFileVersionInfoW(str(path), 0, size, buffer):
+                        address, length = ctypes.c_void_p(), ctypes.c_uint()
+                        if api.VerQueryValueW(buffer, r'\VarFileInfo\Translation', ctypes.byref(address), ctypes.byref(length)) and length.value >= 4:
+                            translation = ctypes.cast(address, ctypes.POINTER(ctypes.c_ushort))
+                            prefix = f'\\StringFileInfo\\{translation[0]:04x}{translation[1]:04x}\\'
+                            for field in ('ProductName','FileDescription'):
+                                if api.VerQueryValueW(buffer, prefix + field, ctypes.byref(address), ctypes.byref(length)) and 1 < length.value < 256:
+                                    value = ctypes.wstring_at(address, length.value).rstrip('\0').strip()
+                                    if value and not any(c in value for c in '/\\'):
+                                        name = value
+                                        break
+            except (OSError, ValueError):
+                pass
+        return ''.join(c for c in name if not unicodedata.category(c).startswith('C'))[:80] or '未命名程序'
+
     def __init__(self, root):
         self.root = root
         self.paths = []
@@ -53,7 +85,7 @@ class ApplicationGuards:
             key = self.key(path)
             if key not in self.elevated:
                 self.elevated[key] = self.task_exists(path)
-            result.append({"id": self.identifier(path), "name": path.stem, "path": str(path),
+            result.append({"id": self.identifier(path), "name": self.name(path), "path": str(path),
                            "state": self.states.get(str(path), "unknown"), "elevated": self.elevated[key]})
         return result
 
@@ -146,12 +178,12 @@ class ApplicationGuards:
     def check(self, cancel, event, health=None):
         if not self.paths or os.name != "nt":
             return
-        for index, path in enumerate(self.paths, 1):
+        for path in self.paths:
             if cancel.is_set():
                 raise InterruptedError()
             state = "error"
             key = 'guard:' + self.identifier(path)
-            label = f'守护程序 {index}'
+            label = self.name(path)
             try:
                 result = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {path.name}", "/FO", "CSV", "/NH"],
                                         capture_output=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)

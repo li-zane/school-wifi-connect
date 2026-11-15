@@ -14,7 +14,7 @@ import time
 import urllib.parse
 
 from .storage import atomic_write
-from .client_control import ClientSwitches
+from .client_control import ClientSwitches, ClientControlError
 
 BEGIN = '// BEGIN SCHOOL-WIFI-CONNECT'
 END = '// END SCHOOL-WIFI-CONNECT'
@@ -27,6 +27,10 @@ class ControllerError(OSError):
     def __init__(self, status):
         self.status = status
         super().__init__(f'controller HTTP {status}')
+
+
+class SwitchStateError(OSError):
+    """A verified state disagreement, distinct from an unavailable controller."""
 
 
 def scalar(text, key, default=''):
@@ -590,7 +594,8 @@ class ProxyProtection:
             if stable >= (2 if wait else 1):
                 return True
             if time.monotonic()>=until:
-                raise OSError('客户端开关与实际网络状态尚未一致')
+                label = 'TUN' if field == 'tun' else '系统代理'
+                raise SwitchStateError(label + '：客户端开关与实际网络状态不一致')
             time.sleep(.2)
 
     def _snapshot(self):
@@ -651,12 +656,13 @@ class ProxyProtection:
                     self.switches.set(field,True,False)
                 self._verify_switch(field,False,saved)
                 saved['completed'].append(field)
-            except Exception:
-                errors.append(field)
+            except Exception as exc:
+                label = 'TUN' if field == 'tun' else '系统代理'
+                errors.append(str(exc) if isinstance(exc,(SwitchStateError,ClientControlError)) else label)
             finally:
                 atomic_write(path,json.dumps(saved).encode())
         if errors:
-            raise OSError('客户端关闭尚未确认：'+', '.join(errors))
+            raise SwitchStateError('客户端关闭尚未确认：'+'；'.join(errors))
         return True
 
     def restore(self):
@@ -672,25 +678,38 @@ class ProxyProtection:
                 gui=self.switches.read()
                 for field in saved.get('restore_attempted',[]):
                     if field not in saved['restored'] and gui[field]==saved['original'][field]:
-                        self._verify_switch(field,saved['original'][field],saved,wait=False)
-                        saved['restored'].append(field)
+                        try:
+                            self._verify_switch(field,saved['original'][field],saved,wait=False)
+                        except SwitchStateError:
+                            pass  # The explicit repair below handles a stale ON indicator.
+                        else:
+                            saved['restored'].append(field)
                 for field in saved['attempted']:
                     if field not in saved['completed'] and not gui[field]:
                         self._verify_switch(field,False,saved,wait=False)
                         saved['completed'].append(field)
-                for field in saved['completed']:
-                    # An explicit restore can acknowledge that the user already restored it.
-                    if field not in saved['restored'] and gui[field]==saved['original'][field]:
-                        self._verify_switch(field,saved['original'][field],saved,wait=False)
-                        saved['restored'].append(field)
-                    desired=field in saved['restored']
-                    if gui[field]!=desired:
-                        raise ValueError('客户端开关已变化，请在客户端中恢复')
-                    self._verify_switch(field,desired,saved,wait=False)
-                if 'proxy' in saved['completed'] and 'proxy' not in saved['restored']:
+                if 'proxy' in saved['completed']:
                     system=self.system_proxy()
-                    if system['ProxyEnable']!=0:
-                        raise ValueError('系统代理已变化，请在客户端中恢复')
+                    if system['ProxyEnable']==1 and not self._owns_proxy(system,saved['port']):
+                        raise ValueError('系统代理已由其他客户端接管，请在客户端中核对')
+                # Validate every switch before writes. An explicit restore may also
+                # repair a stale ON indicator by invoking the client's OFF/ON handlers.
+                reapply = set()
+                for field in saved['completed']:
+                    if gui[field] == saved['original'][field]:
+                        try:
+                            self._verify_switch(field,saved['original'][field],saved,wait=False)
+                        except SwitchStateError:
+                            reapply.add(field)
+                            if field in saved['restored']:
+                                saved['restored'].remove(field)
+                        else:
+                            if field not in saved['restored']:
+                                saved['restored'].append(field)
+                    else:
+                        self._verify_switch(field,False,saved,wait=False)
+                        if field in saved['restored']:
+                            saved['restored'].remove(field)
                 saved['restoring']=True
                 atomic_write(path,json.dumps(saved).encode())
                 for field in reversed(saved['completed']):
@@ -699,16 +718,21 @@ class ProxyProtection:
                     if field not in saved.setdefault('restore_attempted',[]):
                         saved['restore_attempted'].append(field)
                         atomic_write(path,json.dumps(saved).encode())
+                    if field in reapply:
+                        self.switches.set(field,True,False)
+                        self._verify_switch(field,False,saved)
                     self.switches.set(field,False,saved['original'][field])
                     self._verify_switch(field,saved['original'][field],saved)
                     saved['restored'].append(field)
                     atomic_write(path,json.dumps(saved).encode())
                 path.unlink()
                 self.failures=0; self.state='restored'; self.message='客户端已恢复代理设置'
-            except ValueError:
-                raise
+            except (ValueError, SwitchStateError, ClientControlError) as exc:
+                self.state='error'; self.message=str(exc)
+                raise ValueError(str(exc)) from None
             except Exception:
-                raise ValueError('客户端恢复尚未确认，请保持客户端运行后重试') from None
+                self.state='error'; self.message='客户端恢复尚未确认，请保持客户端运行后重试'
+                raise ValueError(self.message) from None
 
     def tick(self, cancel, event, allowed=lambda: True, *, required_failures=3, switch_allowed=lambda: True):
         notice = None
@@ -723,8 +747,19 @@ class ProxyProtection:
                     if saved.get('restoring'):
                         self.state='error'; self.message='客户端恢复尚未完成，请点击恢复代理'; return
                     if set(saved['completed'])==set(saved['fields']):
-                        for field in saved['fields']:
-                            self._verify_switch(field,False,saved,wait=False)
+                        try:
+                            for field in saved['fields']:
+                                self._verify_switch(field,False,saved,wait=False)
+                        except SwitchStateError:
+                            # A verified manual restore retires the old record; a
+                            # partial or stale indicator needs explicit user repair.
+                            gui=self.switches.read()
+                            if not all(gui[k]==saved['original'][k] for k in saved['fields']):
+                                raise SwitchStateError('恢复记录与客户端状态不一致，请点击恢复代理')
+                            for field in saved['fields']:
+                                self._verify_switch(field,saved['original'][field],saved,wait=False)
+                            record.unlink()
+                            self.failures=0; self.state='restored'; self.message='客户端已手动恢复，继续检测出口'; return
                         self.state='direct'; self.message='客户端已关闭代理，等待手动恢复'; return
                 else:
                     previous_exit = self.egress
@@ -758,6 +793,8 @@ class ProxyProtection:
                     notice = ('info', '代理出口异常，客户端已关闭 '+ '、'.join('TUN' if k=='tun' else '系统代理' for k in saved['fields']) + '，已核验；等待手动恢复')
                 else:
                     self.state = 'idle'; self.message = '未检测到本客户端的系统代理或 TUN'
+            except (SwitchStateError, ValueError, ClientControlError) as exc:
+                self.state='error'; self.message=str(exc)
             except Exception:
                 if self.state != 'error' and self.failures >= required_failures:
                     notice = ('error', '代理切换未完成，请在代理客户端中检查 TUN 和系统代理')
@@ -787,3 +824,5 @@ class ProxyProtection:
             stale={(r.split(',',2)[1],r.split(',',2)[2]) for r in self.managed_rules} - set(expected)
             if present[:len(expected)]!=expected or stale.intersection(present):
                 self._apply(wanted,wanted)
+                return True
+        return False

@@ -17,6 +17,10 @@ public static class ProxyClientBridge {
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr handle);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr handle, int command);
     static string Compact(string text) { return String.Concat((text ?? "").Where(c => !Char.IsWhiteSpace(c))); }
+    static bool Label(string text, string[] labels) {
+        // FlClash dashboard buttons append the current state on a second line.
+        return labels.Contains(Compact(text)) || labels.Contains(Compact((text ?? "").Split('\n')[0]));
+    }
     static AutomationElement[] Elements(AutomationElement root) {
         return root.FindAll(TreeScope.Descendants, Condition.TrueCondition).Cast<AutomationElement>().ToArray();
     }
@@ -27,12 +31,12 @@ public static class ProxyClientBridge {
     }
     public static AutomationElement FindSwitch(AutomationElement root, string[] labels) {
         var found = new System.Collections.Generic.List<AutomationElement>();
-        foreach (var label in Elements(root).Where(e => labels.Contains(Compact(e.Current.Name)))) {
+        foreach (var label in Elements(root).Where(e => Label(e.Current.Name,labels))) {
             // Flutter exposes a labelled group containing its checkbox.
             var children = Elements(label).Where(e => { TogglePattern p; return Pattern(e,out p); }).ToArray();
             if (children.Length == 1) found.Add(children[0]);
             // Verge exposes a text label followed by tooltip buttons and a switch.
-            if (label.Current.ControlType == ControlType.Text) {
+            if (label.Current.ControlType == ControlType.Text || label.Current.ControlType == ControlType.Button) {
                 var sibling = Walker.GetNextSibling(label);
                 for (int i=0; sibling != null && i<6; i++, sibling=Walker.GetNextSibling(sibling)) {
                     TogglePattern toggle;
@@ -93,6 +97,8 @@ public static class ProxyClientBridge {
         if(client=="clash-verge") {
             if(!Invoke(root,new[]{"设置","Settings"})) throw new InvalidOperationException("settings unavailable");
         } else {
+            // Current FlClash exposes its actual switches on the dashboard.
+            if(Invoke(root,new[]{"仪表盘","Dashboard"}) && Ready(root)) return;
             if(!Invoke(root,new[]{"工具","Tools"})) throw new InvalidOperationException("tools unavailable");
             for(int i=0;i<4;i++) {
                 if(Invoke(root,new[]{"网络","Network"})) break;
@@ -139,8 +145,18 @@ public static class ProxyClientBridge {
                 if(wasHidden) ShowWindow(handle,0);
             }
             return 0;
-        } catch {
-            Console.WriteLine("{\"ok\":false,\"error\":\"client_switch_unavailable\"}");
+        } catch (Exception error) {
+            string code="client_switch_unavailable";
+            switch(error.Message) {
+                case "client window unavailable": code="window_unavailable"; break;
+                case "client dialog open": code="dialog_open"; break;
+                case "switch unavailable or ambiguous": code="switch_unavailable"; break;
+                case "network settings unavailable": code="settings_unavailable"; break;
+                case "switch disabled": code="switch_disabled"; break;
+                case "state changed": code="state_changed"; break;
+                case "client did not confirm switch": code="switch_unconfirmed"; break;
+            }
+            Console.WriteLine("{\"ok\":false,\"error\":\""+code+"\"}");
             return 1;
         }
     }

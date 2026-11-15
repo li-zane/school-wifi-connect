@@ -7,6 +7,10 @@ import subprocess
 import sys
 
 
+class ClientControlError(OSError):
+    """Fixed product message from the native bridge, without raw process output."""
+
+
 def build_bridge(source, destination):
     framework = Path(os.environ['SystemRoot']) / 'Microsoft.NET/Framework64/v4.0.30319'
     references = ['System.dll', 'System.Core.dll'] + [str(framework / 'WPF' / name) for name in
@@ -35,15 +39,24 @@ class ClientSwitches:
         return destination
 
     def _run(self, *args):
+        message = '客户端开关未确认：请保持客户端运行、关闭设置弹窗，并检查双方运行权限'
         try:
             result = subprocess.run([str(self._executable()), self.client, *args],
                                     capture_output=True, timeout=20, creationflags=0x08000000)
             reply = json.loads(result.stdout.decode('utf-8-sig'))
+            messages = {'window_unavailable':'未找到代理客户端窗口，请保持客户端运行',
+                        'dialog_open':'代理客户端有设置弹窗，请关闭弹窗后重试',
+                        'switch_unavailable':'未找到唯一的代理开关，请检查客户端版本和界面',
+                        'settings_unavailable':'客户端网络设置页面尚未就绪',
+                        'switch_disabled':'代理客户端开关当前不可用',
+                        'state_changed':'代理客户端开关已变化，请重新检测',
+                        'switch_unconfirmed':'客户端未确认开关操作，请核对客户端状态'}
+            message = messages.get(reply.get('error'), message)
             if result.returncode or reply.get('ok') is not True or any(type(reply.get(k)) is not bool for k in ('proxy','tun')):
                 raise OSError()
             return {key:reply[key] for key in ('proxy','tun')}
         except Exception:
-            raise OSError('客户端开关未确认：请保持客户端运行、关闭设置弹窗，并检查双方运行权限') from None
+            raise ClientControlError(message) from None
 
     def read(self):
         return self._run('read')

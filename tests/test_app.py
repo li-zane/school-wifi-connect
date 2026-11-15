@@ -311,8 +311,9 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(self.call("/api/logs")[1]["entries"])
         self.assertEqual(self.call("/api/logs/open", {})[0], 200)
         self.assertEqual(self.call("/api/logs/clear", {})[0], 200)
-        self.assertEqual(self.call("/api/logs")[1]["entries"], [])
-        self.assertEqual((self.store.root / "events.jsonl").read_text(), "")
+        entries = self.call("/api/logs")[1]["entries"]
+        self.assertEqual([row['message'] for row in entries], ['清空日志：已完成'])
+        self.assertEqual(len((self.store.root / "events.jsonl").read_text('utf-8').splitlines()), 1)
 
     def test_busy_program_edits_do_not_change_configuration(self):
         self.service.busy = True

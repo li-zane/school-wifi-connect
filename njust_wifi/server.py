@@ -124,7 +124,9 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/proxy/groups":
             try:
                 self.send(200, {'groups':service.proxy.groups()})
+                service.audit(service.operation(self.path, {}))
             except ValueError as exc:
+                service.audit(service.operation(self.path, {}), False)
                 self.send(400, {'error':str(exc)})
         elif self.path == "/api/credentials":
             with service.lock:
@@ -150,6 +152,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, {"error": "页面不存在"})
 
     def do_POST(self):
+        operation = None
         if not self.trusted():
             return
         if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
@@ -164,6 +167,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(raw, dict):
                 raise ValueError("请求格式不正确")
             service = self.server.service
+            operation = service.operation(self.path, raw)
             if self.path == "/api/config":
                 service.configure(raw)
             elif self.path in ('/api/update/check', '/api/update/download'):
@@ -185,6 +189,7 @@ class Handler(BaseHTTPRequestHandler):
                 service.forget()
             elif self.path == "/api/probes/browse":
                 self.send(200, {"candidates": service.browse()})
+                service.audit(operation)
                 return
             elif self.path in ('/api/proxy/policy','/api/proxy/group','/api/proxy/restore','/api/proxy/check','/api/proxy/client','/api/proxy/controller'):
                 service.proxy_action(self.path.rsplit('/',1)[1], raw)
@@ -197,12 +202,15 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.send(404, {"error": "操作不存在"})
                 return
+            service.audit(operation)
             self.send(200, {"ok": True})
         except (json.JSONDecodeError, UnicodeDecodeError):
             self.send(400, {"error": "JSON 格式不正确"})
         except ValueError as exc:
+            self.server.service.audit(operation, False)
             # ValueErrors are controlled validation messages, never raw input.
             self.send(400, {"error": str(exc) if not str(exc).startswith("invalid literal") else "请求长度格式不正确"})
         except Exception:
+            self.server.service.audit(operation, False)
             self.send(500, {"error": "操作未完成，请稍后重试"})
 

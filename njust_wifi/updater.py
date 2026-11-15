@@ -126,6 +126,7 @@ class UpdateManager:
         self.release = None
         self.stage = None
         self.manifest = None
+        self.event = None
 
     def status(self):
         with self.lock:
@@ -157,6 +158,11 @@ class UpdateManager:
             # No raw URL, local path, response body or proxy credentials in UI.
             message = str(exc) if isinstance(exc, ValueError) else '连接 GitHub 或处理更新失败，请稍后重试'
             self.set(state='error', message=message, progress=0)
+        if self.event:
+            state = self.status()['state']
+            message = {'available':'检测到新版本', 'current':'软件已是最新版本',
+                       'ready':'更新下载及校验已完成', 'error':'更新操作未完成，请稍后重试'}.get(state, '更新检查已完成')
+            self.event('error' if state == 'error' else 'info', message)
 
     def check(self):
         try:

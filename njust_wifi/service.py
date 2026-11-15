@@ -89,6 +89,7 @@ class Service:
         self.entries = deque(maxlen=100)
         self.health_spans = {}
         self.health_ticks = {}
+        self.maintenance_states = {}
         self.balance_worker = None
         self.balance_generation = 0
         self.balance_attempt = 0.0
@@ -108,6 +109,8 @@ class Service:
                             if entry['message'] == '正在检测网络连接':
                                 continue
                             clean = {key: entry[key] for key in ("time", "level", "message")}
+                            if entry.get('private') is True:
+                                clean['private'] = True
                             duration = entry.get('duration_seconds')
                             if isinstance(duration, (int, float)) and 0 <= duration < 10 ** 12:
                                 # A restart cannot establish uninterrupted health during downtime.
@@ -129,6 +132,7 @@ class Service:
                         pass
         if not (store.root / 'events.jsonl').exists():
             self._save_logs()
+        self.updater.event = self.guard_event
         self.worker = threading.Thread(target=self._work, name="wifi-monitor", daemon=True)
         self.worker.start()
         self.proxy_worker = threading.Thread(target=self._proxy_work, name="proxy-protection", daemon=True)
@@ -173,10 +177,10 @@ class Service:
             self.balance_attempt = time.monotonic()
             self._balance.update(state="loading", message="正在刷新")
             self.balance_worker = threading.Thread(target=self._fetch_balance,
-                args=(username, generation), name="wifi-balance", daemon=True)
+                args=(username, generation, not automatic), name="wifi-balance", daemon=True)
             self.balance_worker.start()
 
-    def _fetch_balance(self, username, generation):
+    def _fetch_balance(self, username, generation, requested=False):
         try:
             value = self.balance_factory().fetch(username)
             result = {"balance": value, "currency": "CNY", "updated_at": now(),
@@ -188,6 +192,11 @@ class Service:
         with self.lock:
             if generation == self.balance_generation and not self.closed.is_set():
                 self._balance.update(result)
+                message = '余额已刷新' if result['state'] == 'ready' else '余额查询未完成'
+                if requested:
+                    self._append_log('info' if result['state'] == 'ready' else 'error', message)
+                else:
+                    self.maintenance('balance', 'info' if result['state'] == 'ready' else 'error', message)
 
     def logs(self):
         with self.lock:
@@ -204,9 +213,80 @@ class Service:
         except OSError:
             pass
 
-    def _append_log(self, state, message):
-        self.entries.append({'time': now(), 'level': 'error' if state == 'error' else 'info', 'message': message})
+    def _append_log(self, state, message, *, private=False):
+        self.entries.append({'time': now(), 'level': 'error' if state == 'error' else 'info', 'message': message,
+                             **({'private': True} if private else {})})
         self._save_logs()
+
+    def operation(self, path, raw):
+        """Bounded labels only: payloads, credentials, groups and paths stay local."""
+        labels = {'/api/config':'保存设置', '/api/start':'开启自动连接', '/api/check':'手动检测网络',
+                  '/api/stop':'暂停自动连接', '/api/balance/refresh':'刷新余额',
+                  '/api/credentials/forget':'清除凭据', '/api/probes/browse':'选择守护软件',
+                  '/api/probes/add':'添加守护软件', '/api/probes/remove':'移除守护软件',
+                  '/api/probes/clear':'清空守护软件', '/api/probes/elevate':'设置管理员守护',
+                  '/api/proxy/client':'切换代理客户端', '/api/proxy/controller':'保存外部控制设置',
+                  '/api/proxy/check':'手动检测代理出口', '/api/proxy/restore':'恢复代理和 TUN',
+                  '/api/proxy/group':'设置守护代理组', '/api/proxy/policy':'设置软件网络方式',
+                  '/api/proxy/groups':'连接代理客户端', '/api/logs/clear':'清空日志',
+                  '/api/logs/open':'打开日志目录', '/api/update/check':'检查更新',
+                  '/api/update/download':'下载更新', '/api/update/install':'安装更新'}
+        label = labels.get(path)
+        if label is None:
+            return None
+        private = False
+        if path == '/api/config':
+            fields = {'username':'认证账号', 'password':'认证密码', 'fallback_networks':'备用 WiFi',
+                      'proxy_fail_open':'代理故障保护', 'startup_enabled':'开机联网',
+                      'auto_start_monitor':'自动值守', 'close_behavior':'关闭行为'}
+            changed = [name for key,name in fields.items() if key in raw]
+            if changed:
+                label += '（' + '、'.join(changed) + '）'
+        with self.lock:
+            paths = self.guards.paths
+            if path == '/api/proxy/policy':
+                paths = [p for p in paths if self.guards.identifier(p) == raw.get('id')]
+                mode = {'direct':'直连', 'proxy':'代理组', 'follow':'跟随系统'}.get(raw.get('mode')) if isinstance(raw.get('mode'),str) else None
+                if mode:
+                    label += ' · ' + mode
+            elif path in ('/api/probes/remove','/api/probes/elevate'):
+                ids = raw.get('ids')
+                paths = [p for p in paths if isinstance(ids,list) and self.guards.identifier(p) in ids]
+            elif path != '/api/probes/clear':
+                paths = []
+            if paths:
+                label += ' · ' + '、'.join(self.guards.name(p) for p in paths)
+                private = True
+        return label, private
+
+    def audit(self, operation, success=True):
+        if operation:
+            label, private = operation
+            with self.lock:
+                queued = any(label.startswith(word) for word in ('手动检测', '刷新余额', '检查更新', '下载更新', '安装更新'))
+                self._append_log('info' if success else 'error', label +
+                                 ('：已提交' if success and queued else '：已完成' if success else '：未完成'), private=private)
+
+    def maintenance(self, key, state, message):
+        """Log transitions once, rather than repeating a failed timer tick."""
+        with self.lock:
+            signature = state, message
+            if self.maintenance_states.get(key) != signature:
+                self.maintenance_states[key] = signature
+                self._append_log(state, message)
+
+    def observe_proxy(self, *, requested=False):
+        status = self.proxy.status()
+        state, message = status['state'], status['message']
+        self.health('proxy', '代理出口正常', state == 'healthy')
+        if state != 'healthy' or requested:
+            if requested:
+                self.guard_event('error' if state in ('error','failed') else 'info', '代理出口检测结果：' + message)
+            else:
+                self.maintenance('proxy', 'error' if state in ('error','failed') else state, message)
+        else:
+            with self.lock:
+                self.maintenance_states['proxy'] = state, message
 
     def health(self, key: str, message: str, healthy: bool = True):
         with self.lock:
@@ -223,6 +303,8 @@ class Service:
                 return
             if entry is None:
                 entry = {'time': now(), 'level': 'info', 'message': message, 'duration_seconds': 0, 'active': True}
+                if key.startswith('guard:'):
+                    entry['private'] = True
                 self.entries.append(entry)
                 self.health_spans[key] = entry
                 self.health_ticks[key] = time.monotonic()
@@ -230,9 +312,9 @@ class Service:
             else:
                 entry['message'] = message
 
-    def guard_event(self, state, message):
+    def guard_event(self, state, message, *, private=False):
         with self.lock:
-            self._append_log(state, message)
+            self._append_log(state, message, private=private)
 
     def event(self, state: str, message: str) -> None:
         with self.lock:
@@ -262,6 +344,8 @@ class Service:
                 self.once = True
             else:
                 self.running = True
+            if not once:
+                self.maintenance('monitor', 'info', '自动网络值守已启动')
             self.wake.set()
 
     def stop(self) -> None:
@@ -272,6 +356,7 @@ class Service:
             for key in list(self.health_spans):
                 self.health(key, '', False)
             self.event("idle", "已暂停自动连接")
+            self.maintenance_states.pop('monitor', None)
             self.wake.set()
 
     def config_view(self) -> dict:
@@ -320,8 +405,11 @@ class Service:
     def diagnostics(self) -> dict:
         with self.lock:
             # Allowlist only: no settings, SSIDs, account masks, paths or raw HTTP.
+            events = [{key:value for key,value in entry.items() if key != 'private'} |
+                      ({'message':'程序守护记录（软件名称已隐藏）'} if entry.get('private') else {})
+                      for entry in self.logs()]
             return {"app": "NJUSTWiFi", "version": __version__, "exported_at": now(),
-                    "status": self.status(), "events": self.logs(),
+                    "status": self.status(), "events": events,
                     "privacy": "不包含账号、密码、网络名称、设备地址或个人路径"}
 
     def probe_items(self):
@@ -335,6 +423,9 @@ class Service:
             previous = {self.guards.identifier(path) for path in self.guards.paths}
             if action == "add":
                 self.guards.add(raw.get("paths"))
+                for path in self.guards.paths:
+                    if self.guards.identifier(path) not in previous:
+                        self._append_log('info', '已添加守护软件 · ' + self.guards.name(path), private=True)
             elif action == "remove":
                 selected = self.guards.selected(raw.get("ids"))
                 self.proxy.remove(self.guards.paths, {self.guards.identifier(path) for path in selected})
@@ -384,15 +475,21 @@ class Service:
                 try:
                     with self.lock:
                         paths = list(self.guards.paths)
-                    self.proxy.ensure_rules(paths)
+                    if self.proxy.ensure_rules(paths):
+                        self.maintenance('rules', 'info', '客户端配置已变化，已自动恢复软件分流规则')
+                    else:
+                        self.maintenance_states.pop('rules', None)
+                    self.maintenance_states.pop('rules-error', None)
                 except Exception:
                     with self.proxy.lock:
                         self.proxy.state='error'; self.proxy.message='客户端分流待同步，请连接本地接口'
+                    self.maintenance('rules-error', 'error', '软件分流规则同步未完成，请连接客户端外部控制接口')
             if enabled or requested:
                 self.proxy.tick(self.closed, self.guard_event,
                     lambda: requested or self.store.settings["proxy_fail_open"],
                     required_failures=1 if requested else 3,
                     switch_allowed=lambda: self.store.settings["proxy_fail_open"])
+                self.observe_proxy(requested=requested)
             self.proxy_wake.wait(15 if enabled or synchronize else None)
             self.proxy_wake.clear()
 
@@ -409,6 +506,7 @@ class Service:
             self.entries.clear()
             self.health_spans.clear()
             self.health_ticks.clear()
+            self.maintenance_states.clear()
             for suffix in ('.1', '.2'):
                 (self.store.root / ('events.jsonl' + suffix)).unlink(missing_ok=True)
             self._save_logs()
@@ -443,7 +541,7 @@ class Service:
                     if self.cancel.wait(0.1):
                         raise InterruptedError()
                 else:
-                    self.guards.check(self.cancel, self.guard_event, self.health)
+                    self.guards.check(self.cancel, lambda state,message: self.guard_event(state,message,private=True), self.health)
                     network = self.network_factory(self.cancel)
                     with network_lease(self.cancel):
                         network.recover(settings, username, password, self.event)
@@ -454,6 +552,7 @@ class Service:
                         # reconfirms the physical direct path before switching.
                         self.proxy.tick(self.cancel, self.guard_event,
                             lambda: self.store.settings['proxy_fail_open'], required_failures=1)
+                        self.observe_proxy()
                 with self.lock:
                     if self.cancel.is_set():
                         raise InterruptedError()

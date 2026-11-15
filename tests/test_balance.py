@@ -85,7 +85,7 @@ class BalanceTests(unittest.TestCase):
         service.refresh_balance(automatic=True)
         self.assertEqual(client.fetch.call_count, 1)
         self.assertNotIn("123.45", json.dumps(service.diagnostics()))
-        self.assertNotIn("123.45", (service.store.root / "events.jsonl").read_text())
+        self.assertNotIn("123.45", (service.store.root / "events.jsonl").read_text('utf-8'))
         snapshot = service.balance()
         snapshot["balance"] = -1
         self.assertEqual(service.balance()["balance"], 123.45)
