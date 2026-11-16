@@ -1,6 +1,6 @@
 /**
  * NJUST WiFi 校园网认证 - 前端核心交互逻辑
- * 淡红淡蓝界面 · 原生 ES Module · 低资源消耗 · 隐藏页面停止轮询
+ * 原生 ES Module · 低资源消耗 · 隐藏页面停止轮询
  */
 
 // ==========================================================================
@@ -62,7 +62,7 @@ const dom = {
   btnRefreshBalance: document.getElementById('btn-refresh-balance'),
 
   // 核心状态卡片
-  connectionCard: document.querySelector('.connection-card'),
+  connectionCard: document.getElementById('status-hero'),
   networkStatePill: document.getElementById('network-state-pill'),
   networkStateText: document.getElementById('network-state-text'),
   runningStatePill: document.getElementById('running-state-pill'),
@@ -80,7 +80,7 @@ const dom = {
   btnExportDiag: document.getElementById('btn-export-diag'),
 
   // 分段选项卡
-  tabBtns: document.querySelectorAll('.glass-segmented-tabs .seg-tab'),
+  tabBtns: document.querySelectorAll('.nav-tabs .nav-tab'),
   tabPanels: document.querySelectorAll('.tab-panel'),
 
   // 程序守护
@@ -172,6 +172,35 @@ function formatTime(isoString, includeDate = true) {
   } catch {
     return String(isoString);
   }
+}
+
+/**
+ * 指标格：主值用大号数字，补充信息用小字
+ */
+function renderMetric(el, main, sub = '', title = '') {
+  if (!el) return;
+  const signature = `${main}|${sub}`;
+  if (el.dataset.value === signature) return;
+  el.dataset.value = signature;
+  const strong = document.createElement('b');
+  strong.textContent = main;
+  el.replaceChildren(strong);
+  if (sub) {
+    const small = document.createElement('small');
+    small.textContent = sub;
+    el.appendChild(small);
+  }
+  el.title = title;
+}
+
+/**
+ * 时间指标：时刻为主，日期为辅，完整时间放在悬停提示
+ */
+function renderMoment(el, isoString) {
+  const full = isoString ? formatTime(isoString) : '';
+  const [date, time] = full.split(' ');
+  if (date && time) renderMetric(el, time, date.slice(5), full);
+  else renderMetric(el, full || '--');
 }
 
 function formatDuration(seconds) {
@@ -402,14 +431,14 @@ async function sendApiRequest(endpoint, options = {}, isRetry = false) {
   } catch (netErr) {
     if (dom.connStatePill) {
       dom.connStatePill.textContent = '离线 / 未连接';
-      dom.connStatePill.className = 'glass-pill pill-busy';
+      dom.connStatePill.className = 'chip chip-busy';
     }
     throw new Error('网络请求异常，请确认服务运行中');
   }
 
   if (dom.connStatePill) {
     dom.connStatePill.textContent = '服务就绪';
-    dom.connStatePill.className = 'glass-pill pill-soft';
+    dom.connStatePill.className = 'chip chip-soft';
   }
 
   // 401/403 重新拉取 token 并重试一次
@@ -508,13 +537,13 @@ function renderBalance(data) {
   if (dom.balanceStatePill) {
     if (data.state === 'loading') {
       dom.balanceStatePill.textContent = '查询中';
-      dom.balanceStatePill.className = 'glass-status-pill state-checking';
+      dom.balanceStatePill.className = 'status-chip state-checking';
     } else if (data.state === 'ready') {
       dom.balanceStatePill.textContent = '就绪';
-      dom.balanceStatePill.className = 'glass-status-pill state-online';
+      dom.balanceStatePill.className = 'status-chip state-online';
     } else {
       dom.balanceStatePill.textContent = data.updated_at ? '待更新' : '未获取';
-      dom.balanceStatePill.className = 'glass-status-pill state-idle';
+      dom.balanceStatePill.className = 'status-chip state-idle';
     }
   }
 
@@ -542,7 +571,7 @@ async function handleRefreshBalance() {
 
     if (dom.balanceStatePill) {
       dom.balanceStatePill.textContent = '查询中';
-      dom.balanceStatePill.className = 'glass-status-pill state-checking';
+      dom.balanceStatePill.className = 'status-chip state-checking';
     }
 
     await apiRequest('/api/balance/refresh', {
@@ -592,10 +621,10 @@ function renderStatus(status) {
   if (dom.runningStatePill) {
     if (status.running) {
       dom.runningStatePill.textContent = '运行中';
-      dom.runningStatePill.className = 'glass-pill pill-soft';
+      dom.runningStatePill.className = 'chip chip-soft';
     } else {
       dom.runningStatePill.textContent = '已暂停';
-      dom.runningStatePill.className = 'glass-pill pill-subtle';
+      dom.runningStatePill.className = 'chip chip-muted';
     }
   }
 
@@ -609,16 +638,16 @@ function renderStatus(status) {
   }
 
   const stateMap = {
-    online: { text: '在线正常', pillClass: 'glass-status-pill state-online' },
-    checking: { text: '正在检测', pillClass: 'glass-status-pill state-checking' },
-    recovering: { text: '自愈重连', pillClass: 'glass-status-pill state-recovering' },
-    error: { text: '认证异常', pillClass: 'glass-status-pill state-error' },
-    idle: { text: '待机静默', pillClass: 'glass-status-pill state-idle' }
+    online: { text: '在线正常', pillClass: 'hero-state state-online' },
+    checking: { text: '正在检测', pillClass: 'hero-state state-checking' },
+    recovering: { text: '自愈重连', pillClass: 'hero-state state-recovering' },
+    error: { text: '认证异常', pillClass: 'hero-state state-error' },
+    idle: { text: '待机静默', pillClass: 'hero-state state-idle' }
   };
 
   const currentSt = stateMap[status.state] || {
     text: status.state || '未知',
-    pillClass: 'glass-status-pill state-idle'
+    pillClass: 'hero-state state-idle'
   };
 
   if (dom.networkStatePill) dom.networkStatePill.className = currentSt.pillClass;
@@ -642,10 +671,10 @@ function renderStatus(status) {
     dom.statusMessage.textContent = status.message || '系统运行正常';
   }
 
-  if (dom.mNormalCount) dom.mNormalCount.textContent = `${status.normal_count ?? 0} 次`;
-  if (dom.mStableSince) dom.mStableSince.textContent = status.unchanged_since ? formatTime(status.unchanged_since) : '--';
-  if (dom.mCheckedAt) dom.mCheckedAt.textContent = formatTime(status.checked_at);
-  if (dom.mNextCheckAt) dom.mNextCheckAt.textContent = formatTime(status.next_check_at);
+  renderMetric(dom.mNormalCount, String(status.normal_count ?? 0), '次');
+  renderMoment(dom.mStableSince, status.unchanged_since);
+  renderMoment(dom.mCheckedAt, status.checked_at);
+  renderMoment(dom.mNextCheckAt, status.next_check_at);
   syncControls();
 }
 
@@ -768,7 +797,7 @@ function renderFallbackNetworks() {
       ssidInput.type = 'text';
       ssidInput.id = `fallback-ssid-${index}`;
       ssidLabel.htmlFor = ssidInput.id;
-      ssidInput.className = 'glass-input fallback-ssid-input';
+      ssidInput.className = 'input fallback-ssid-input';
       ssidInput.maxLength = 32;
       ssidInput.placeholder = '备用网络 SSID';
       ssidInput.value = item.ssid || '';
@@ -800,7 +829,7 @@ function renderFallbackNetworks() {
       pwdInput.type = 'text';
       pwdInput.id = `fallback-password-${index}`;
       pwdLabel.htmlFor = pwdInput.id;
-      pwdInput.className = 'glass-input input-with-toggle fallback-pwd-input';
+      pwdInput.className = 'input input-with-toggle fallback-pwd-input';
       pwdInput.placeholder = '留空复用本机网络配置';
       pwdInput.value = item.password || item.profilePassword || '';
       if (item.profilePassword) pwdInput.title = 'Windows 已保存的网络密码';
@@ -935,7 +964,7 @@ function renderProbesList() {
 
       const chk = document.createElement('input');
       chk.type = 'checkbox';
-      chk.className = 'glass-checkbox';
+      chk.className = 'check';
       chk.checked = selectedProbeIds.has(probe.id);
       chk.setAttribute('aria-label', probe.name || '守护程序');
       chk.addEventListener('change', () => {
@@ -985,7 +1014,7 @@ function renderProbesList() {
       li.appendChild(left);
 
       const route = document.createElement('select');
-      route.className = 'glass-input probe-route'; route.setAttribute('aria-label', `${probe.name} 的网络方式`);
+      route.className = 'input probe-route'; route.setAttribute('aria-label', `${probe.name} 的网络方式`);
       for (const [value, text] of [['follow','跟随系统'],['direct','直连'],['proxy','代理 / TUN']]) {
         const option = new Option(text, value); route.add(option);
       }
@@ -1119,7 +1148,7 @@ function renderCandidatesList() {
 
     const chk = document.createElement('input');
     chk.type = 'checkbox';
-    chk.className = 'glass-checkbox';
+    chk.className = 'check';
     chk.checked = selectedCandidatePaths.has(c.path);
     chk.setAttribute('aria-label', c.name || '候选程序');
     chk.addEventListener('change', () => {
@@ -1296,10 +1325,10 @@ async function loadConfig() {
     if (dom.savedAccountPill) {
       if (hasSavedCredentials) {
         dom.savedAccountPill.textContent = `已存账号: ${masked || '已配置'}`;
-        dom.savedAccountPill.className = 'glass-pill pill-soft';
+        dom.savedAccountPill.className = 'chip chip-soft';
       } else {
         dom.savedAccountPill.textContent = '未设置账号';
-        dom.savedAccountPill.className = 'glass-pill pill-subtle';
+        dom.savedAccountPill.className = 'chip chip-muted';
       }
     }
 
@@ -1362,7 +1391,9 @@ function renderLogsList() {
     return;
   }
 
-  for (const entry of filtered) {
+  // 正在计时的正常记录固定在底部，各组内保留原始顺序。
+  const ordered = filtered.filter(entry => !entry.active).concat(filtered.filter(entry => entry.active));
+  for (const entry of ordered) {
     const li = document.createElement('li');
     li.className = 'log-entry';
 

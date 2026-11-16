@@ -47,17 +47,11 @@ export function initProxy({ apiRequest, showToast, onClientChanged }) {
     });
 
   function scrollControllerIntoView() {
-    const card = controllerDetails?.closest('.proxy-card');
-    if (!card || card.scrollHeight <= card.clientHeight) return;
+    if (!controllerDetails) return;
     const reduced =
       typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    const targetTop =
-      card.scrollTop +
-      controllerDetails.getBoundingClientRect().top -
-      card.getBoundingClientRect().top -
-      10;
-    card.scrollTo({ top: Math.max(0, targetTop), behavior: reduced ? 'auto' : 'smooth' });
+    controllerDetails.scrollIntoView({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' });
   }
 
   function renderControllerMeta() {
@@ -65,7 +59,7 @@ export function initProxy({ apiRequest, showToast, onClientChanged }) {
     const manual = Boolean(urlOverride) || Boolean(secretOverride) || !controllerAutomatic;
     if (controllerMode) {
       controllerMode.textContent = manual ? '手动' : '自动';
-      controllerMode.className = manual ? 'glass-pill pill-soft' : 'glass-pill pill-subtle';
+      controllerMode.className = manual ? 'chip chip-soft' : 'chip chip-muted';
     }
     if (controllerUrl) {
       controllerUrl.placeholder = isFlClash ? 'http://127.0.0.1:9090' : 'http://127.0.0.1:9097';

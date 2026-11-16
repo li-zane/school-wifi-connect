@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "demo",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-B", "app.py", "--demo", "--serve", "--data-dir", ".tmp/redesign-demo", "--port", "18097"],
+      "port": 18097,
+      "url": "http://127.0.0.1:18097",
+      "autoPort": false
+    }
+  ]
+}

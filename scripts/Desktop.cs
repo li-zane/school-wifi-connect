@@ -120,7 +120,7 @@ internal sealed class DesktopWindow : GlassWindow
     {
         Text = "NJUST WiFi"; Width = 1120; Height = 780;
         MinimumSize = new Size(860, 620); StartPosition = FormStartPosition.CenterScreen;
-        BackColor = Color.FromArgb(246, 249, 253);
+        BackColor = Color.FromArgb(242, 242, 239);
         loading = new Label { Text = "正在启动…", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Microsoft YaHei UI", 12) };
         Content.Controls.Add(loading);
         Resize += (s, e) => SyncWindowState();
