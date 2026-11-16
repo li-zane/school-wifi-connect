@@ -9,7 +9,7 @@ internal class GlassWindow : Form
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wparam, IntPtr lparam);
     protected readonly Panel Content = new Panel { Dock = DockStyle.Fill };
-    private Color border = Color.FromArgb(240, 220, 229);
+    private Color border = Color.FromArgb(222, 222, 218);
     protected GlassWindow()
     {
         FormBorderStyle = FormBorderStyle.None;
@@ -34,8 +34,8 @@ internal class GlassWindow : Form
     }
     protected void SetChromeTheme(bool dark)
     {
-        BackColor = Content.BackColor = dark ? Color.FromArgb(32, 27, 38) : Color.FromArgb(253, 244, 248);
-        border = dark ? Color.FromArgb(61, 49, 68) : Color.FromArgb(240, 220, 229);
+        BackColor = Content.BackColor = dark ? Color.FromArgb(15, 16, 18) : Color.FromArgb(242, 242, 239);
+        border = dark ? Color.FromArgb(38, 40, 44) : Color.FromArgb(222, 222, 218);
         Invalidate();
     }
     protected override void OnPaint(PaintEventArgs e)

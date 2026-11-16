@@ -1,7 +1,7 @@
 const STORAGE_KEY = 'njust_onboarding_v1';
 const STEPS = [
-  {tab: 'panel-config', target: '.account-slots-section .form-slots-grid', title: '填写校园账号', text: '校园网填学号和密码；只用备用 WiFi 可跳过。'},
-  {tab: 'panel-config', target: '.fallback-networks-section .section-title-row', title: '添加备用 WiFi', text: '填好网络和密码，靠前的优先连接。'},
+  {tab: 'panel-config', target: '#campus-account', title: '填写校园账号', text: '校园网填学号和密码；只用备用 WiFi 可跳过。'},
+  {tab: 'panel-config', target: '#fallback-head', title: '添加备用 WiFi', text: '填好网络和密码，靠前的优先连接。'},
   {tab: 'panel-config', target: '#autosave-state', title: '修改即保存', text: '填好后移开光标即可，开关和排序也会自动保存。'},
   {tab: 'panel-status', target: '#btn-toggle-service', title: '开始监控', text: '自动检测网络，断网时尝试恢复。'},
   {tab: 'panel-probes', target: '#btn-open-add-probe', title: '认识程序守护', text: '可选添加常用程序，退出后尝试拉起。'}
@@ -40,7 +40,7 @@ export function initOnboarding({switchTab, isConfigured, getRunning}) {
     if (!active || !target) return;
     const rect = target.getBoundingClientRect();
     if (!rect.width || !rect.height) { finish('skipped', false); return; }
-    const pane = target.closest('.tab-panel > .glass-panel');
+    const pane = target.closest('.tab-panel');
     const clip = pane?.getBoundingClientRect();
     const left = Math.max(8, rect.left, clip ? clip.left + 4 : 0);
     const right = Math.min(innerWidth - 8, rect.right, clip ? clip.right - 4 : innerWidth);
@@ -49,9 +49,7 @@ export function initOnboarding({switchTab, isConfigured, getRunning}) {
     if (right <= left || bottom <= top) { finish('skipped', false); return; }
     ring.hidden = false;
     Object.assign(ring.style, {left: `${left - 4}px`, top: `${top - 4}px`, width: `${right - left + 8}px`, height: `${bottom - top + 8}px`});
-    const navigation = document.querySelector('.glass-segmented-tabs');
-    const vertical = navigation.getAttribute('aria-orientation') === 'vertical';
-    const limit = vertical ? innerHeight - 10 : Math.min(innerHeight - 10, navigation.getBoundingClientRect().top - 10);
+    const limit = innerHeight - 10;
     const above = top - 22, below = limit - bottom - 12;
     card.style.maxHeight = `${Math.max(88, Math.max(above, below))}px`;
     const bounds = card.getBoundingClientRect();
@@ -71,7 +69,7 @@ export function initOnboarding({switchTab, isConfigured, getRunning}) {
     switchTab(step.tab);
     target = document.querySelector(step.target);
     if (!target) { finish('skipped'); return; }
-    const pane = target.closest('.tab-panel > .glass-panel');
+    const pane = target.closest('.tab-panel');
     if (pane) {
       const rect = target.getBoundingClientRect(), area = pane.getBoundingClientRect();
       pane.scrollTop += rect.top - area.top - (pane.clientHeight - rect.height) / 2;
@@ -86,7 +84,7 @@ export function initOnboarding({switchTab, isConfigured, getRunning}) {
     observer?.disconnect();
     observer = new ResizeObserver(requestPosition);
     observer.observe(target);
-    observer.observe(target.closest('.account-slots-section, .fallback-networks-section') || target);
+    observer.observe(target.closest('#campus-account, #fallback-section') || target);
     observer.observe(card);
     position();
     if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -128,7 +126,7 @@ export function initOnboarding({switchTab, isConfigured, getRunning}) {
     if (!active) {
       returnFocus = document.activeElement;
       returnTab = document.querySelector('.tab-panel.active')?.id || 'panel-status';
-      savedScroll = [...document.querySelectorAll('.tab-panel > .glass-panel')].map(element => [element, element.scrollTop]);
+      savedScroll = [...document.querySelectorAll('.tab-panel')].map(element => [element, element.scrollTop]);
       active = true;
       root.hidden = false;
       window.addEventListener('resize', requestPosition);

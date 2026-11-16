@@ -12,563 +12,519 @@
 <body>
   <div id="toast-bar" class="toast-bar hidden" role="status" aria-live="polite" aria-atomic="true" popover="manual"></div>
 
-  <div class="glass-app">
-    <aside class="desktop-sidebar">
-      <div class="brand-zone" data-window-drag><div class="brand-logo-wrap"><img src="logo.webp" class="brand-logo" alt="" draggable="false"></div><h1 class="brand-title">NJUST WiFi</h1></div>
-      <nav class="glass-segmented-tabs" role="tablist" aria-label="功能分区" aria-orientation="vertical">
-        <button class="seg-tab active" id="tab-btn-status" role="tab" aria-selected="true" aria-controls="panel-status" type="button">
+  <div class="app">
+    <header class="titlebar" data-window-drag>
+      <div class="brand">
+        <img src="logo.webp" class="brand-logo" alt="" draggable="false">
+        <h1 class="brand-name">NJUST WiFi</h1>
+      </div>
+
+      <nav class="nav-tabs" role="tablist" aria-label="功能分区" aria-orientation="horizontal">
+        <button class="nav-tab active" id="tab-btn-status" role="tab" aria-selected="true" aria-controls="panel-status" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M5 19v-4"/>
-            <path d="M10 19v-8"/>
-            <path d="M15 19V7"/>
-            <path d="M20 19V4"/>
+            <path d="M5 13a10 10 0 0 1 14 0"/>
+            <path d="M8.5 16.5a5 5 0 0 1 7 0"/>
+            <circle cx="12" cy="19.5" r="1" fill="currentColor" stroke="none"/>
+            <path d="M2 9.5a14.5 14.5 0 0 1 20 0"/>
           </svg>
           <span>状态</span>
         </button>
-
-        <button class="seg-tab" id="tab-btn-config" role="tab" aria-selected="false" aria-controls="panel-config" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        <button class="nav-tab" id="tab-btn-config" role="tab" aria-selected="false" aria-controls="panel-config" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7h9M17 7h3M4 17h3M11 17h9"/>
+            <circle cx="15" cy="7" r="2"/>
+            <circle cx="9" cy="17" r="2"/>
           </svg>
           <span>设置</span>
         </button>
-
-        <button class="seg-tab" id="tab-btn-probes" role="tab" aria-selected="false" aria-controls="panel-probes" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 3 4.5 6.2V12c0 4.6 3.2 8.2 7.5 9.5 4.3-1.3 7.5-4.9 7.5-9.5V6.2z"/>
-            <path d="m8.8 12.2 2.2 2.3 4.4-4.7"/>
+        <button class="nav-tab" id="tab-btn-probes" role="tab" aria-selected="false" aria-controls="panel-probes" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3 5 6v5.5c0 4.4 3 7.7 7 9.5 4-1.8 7-5.1 7-9.5V6z"/>
+            <path d="m9 12 2.2 2.2L15.2 10"/>
           </svg>
           <span>守护</span>
         </button>
-
-        <button class="seg-tab" id="tab-btn-logs" role="tab" aria-selected="false" aria-controls="panel-logs" type="button">
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="5" y="3.5" width="14" height="17" rx="3"/>
-            <path d="M9 8.5h6M9 12h6M9 15.5h4"/>
+        <button class="nav-tab" id="tab-btn-logs" role="tab" aria-selected="false" aria-controls="panel-logs" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 7h14M5 12h14M5 17h9"/>
           </svg>
           <span>日志</span>
         </button>
       </nav>
 
-      <div class="sidebar-footer">
-        <span class="sidebar-caption">网络监控</span>
-        <span id="running-state-pill" class="glass-pill pill-subtle">--</span>
-        <div class="brand-badges">
-          <span id="version-text" class="glass-pill pill-subtle">v--</span>
-          <span id="conn-state-pill" class="glass-pill pill-soft">服务就绪</span>
+      <div class="titlebar-actions">
+        <h2 id="page-title" class="sr-only">连接状态</h2>
+        <button id="btn-update" class="btn btn-sm btn-ghost" type="button" aria-label="检查更新"><span id="update-label">检查更新</span></button>
+        <button id="btn-onboarding" class="icon-btn" type="button" title="重新查看新手引导" aria-label="新手引导" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M9.6 9.3a2.4 2.4 0 0 1 4.6.8c0 1.6-2.2 2-2.2 3.3"/>
+            <circle cx="12" cy="16.6" r=".8" fill="currentColor" stroke="none"/>
+          </svg>
+        </button>
+        <button id="btn-theme-toggle" class="icon-btn" type="button" title="切换深浅主题" aria-label="切换深浅主题">
+          <svg id="theme-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/>
+          </svg>
+          <span id="theme-icon-text" class="sr-only">深色模式</span>
+        </button>
+        <div class="window-controls" hidden>
+          <button id="window-min" type="button" aria-label="最小化" title="最小化"><svg viewBox="0 0 20 20"><path d="M5 10.5h10"/></svg></button>
+          <button id="window-max" type="button" aria-label="最大化或还原" title="最大化或还原"><svg viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="2.5"/></svg></button>
+          <button id="window-close" type="button" aria-label="关闭窗口" title="关闭窗口"><svg viewBox="0 0 20 20"><path d="m6 6 8 8M14 6l-8 8"/></svg></button>
         </div>
       </div>
-    </aside>
+    </header>
 
-    <div class="desktop-workspace">
-      <header class="glass-header" data-window-drag>
-        <h2 id="page-title">连接状态</h2>
-        <div class="header-actions">
-          <button id="btn-update" class="btn-glass-pill" type="button" aria-label="检查更新"><span id="update-label">检查更新</span></button>
-          <button id="btn-onboarding" class="btn-glass-pill" type="button" title="重新查看新手引导" aria-label="新手引导" disabled>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="9"/>
-              <path d="M9.6 9.3a2.4 2.4 0 0 1 4.6.8c0 1.6-2.2 2-2.2 3.3"/>
-              <circle cx="12" cy="16.5" r=".7" fill="currentColor" stroke="none"/>
-            </svg>
-            <span>引导</span>
-          </button>
-          <button id="btn-theme-toggle" class="btn-glass-pill" type="button" title="切换深浅主题" aria-label="切换深浅主题">
-            <svg id="theme-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/>
-            </svg>
-            <span id="theme-icon-text">深色模式</span>
-          </button>
-          <div class="window-controls" hidden>
-            <button id="window-min" type="button" aria-label="最小化" title="最小化"><svg viewBox="0 0 20 20"><path d="M5 11h10"/></svg></button>
-            <button id="window-max" type="button" aria-label="最大化或还原" title="最大化或还原"><svg viewBox="0 0 20 20"><rect x="5" y="5" width="10" height="10" rx="1"/></svg></button>
-            <button id="window-close" type="button" aria-label="关闭窗口" title="关闭窗口"><svg viewBox="0 0 20 20"><path d="m6 6 8 8M14 6l-8 8"/></svg></button>
+    <main class="workspace">
+      <!-- 状态 -->
+      <section id="panel-status" class="tab-panel active" role="tabpanel" aria-labelledby="tab-btn-status">
+        <div class="page status-page">
+          <div class="status-grid">
+            <div class="status-main">
+              <article id="status-hero" class="card hero" data-state="idle">
+                <svg class="hero-rings" viewBox="0 0 360 360" fill="none" stroke="currentColor" stroke-linecap="round" aria-hidden="true">
+                  <circle cx="360" cy="360" r="44" fill="currentColor" stroke="none"/>
+                  <circle cx="360" cy="360" r="116" stroke-width="30"/>
+                  <circle cx="360" cy="360" r="196" stroke-width="30"/>
+                  <circle cx="360" cy="360" r="276" stroke-width="30"/>
+                </svg>
+                <div class="hero-body">
+                  <div class="hero-headline">
+                    <span id="network-state-pill" class="hero-state state-idle">
+                      <span class="state-dot" aria-hidden="true"></span>
+                      <span id="network-state-text">待机</span>
+                    </span>
+                    <span id="busy-pill" class="chip chip-busy hidden" aria-live="assertive">处理中</span>
+                  </div>
+                  <p id="status-message" class="hero-message" aria-live="polite">正在连接服务…</p>
+                  <p id="stable-info-text" class="hero-meta">--</p>
+                </div>
+                <div class="hero-actions">
+                  <button id="btn-toggle-service" class="btn btn-primary btn-lg" type="button">
+                    <span class="btn-label">--</span>
+                  </button>
+                  <button id="btn-check-now" class="btn btn-lg" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M20 5v5.5h-5.5"/>
+                      <path d="M20 10.5A8 8 0 1 0 18 17"/>
+                    </svg>
+                    <span class="btn-label">立即检测</span>
+                  </button>
+                </div>
+              </article>
+
+              <div class="card metrics">
+                <div class="metric">
+                  <span class="metric-label">稳定开始</span>
+                  <span id="m-stable-since" class="metric-value">--</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">上次检测</span>
+                  <span id="m-checked-at" class="metric-value">--</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">下次检测</span>
+                  <span id="m-next-check-at" class="metric-value">--</span>
+                </div>
+                <div class="metric">
+                  <span class="metric-label">连续正常</span>
+                  <span id="m-normal-count" class="metric-value">0 次</span>
+                </div>
+              </div>
+            </div>
+
+            <aside class="status-side">
+              <section class="card balance" id="balance-card">
+                <header class="card-head">
+                  <h3 class="card-label">校园网余额</h3>
+                  <button id="btn-refresh-balance" class="icon-btn icon-btn-sm card-head-end" type="button" title="刷新余额" aria-label="刷新余额">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M20 5v5.5h-5.5"/>
+                      <path d="M20 10.5A8 8 0 1 0 18 17"/>
+                    </svg>
+                  </button>
+                </header>
+                <span id="balance-val" class="balance-amount">—</span>
+                <div class="balance-meta">
+                  <span id="balance-state-pill" class="status-chip state-idle">就绪</span>
+                  <span id="balance-updated-text" class="balance-updated">更新于 --</span>
+                </div>
+              </section>
+
+              <section class="card overview">
+                <h3 class="card-label">后台概览</h3>
+                <dl class="overview-list">
+                  <div><dt>认证网络</dt><dd id="summary-campus">—</dd></div>
+                  <div><dt>备用队列</dt><dd id="summary-fallbacks">—</dd></div>
+                  <div><dt>守护程序</dt><dd id="summary-probes">—</dd></div>
+                  <div><dt>请求通路</dt><dd id="summary-path">—</dd></div>
+                </dl>
+                <button id="btn-export-diag" class="btn btn-sm overview-export" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 4v11"/>
+                    <path d="m7.5 10.5 4.5 4.5 4.5-4.5"/>
+                    <path d="M5 19.5h14"/>
+                  </svg>
+                  <span>导出脱敏诊断</span>
+                </button>
+              </section>
+            </aside>
           </div>
         </div>
-      </header>
+      </section>
 
-      <main class="tab-panels-wrap">
-        <!-- 状态页 -->
-        <section id="panel-status" class="tab-panel active" role="tabpanel" aria-labelledby="tab-btn-status">
-          <div class="glass-panel status-workspace">
-            <div class="status-grid">
-              <div class="glass-panel connection-card">
-                <div class="hero-top">
-                  <div class="connection-icon" aria-hidden="true">
-                    <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round">
-                      <path d="M7 23c14-14 36-14 50 0"/>
-                      <path d="M15 32c10-10 24-10 34 0"/>
-                      <path d="M23 41c5-5 13-5 18 0"/>
-                      <circle cx="32" cy="50" r="3.6" fill="currentColor" stroke="none"/>
-                    </svg>
-                  </div>
-                  <div class="connection-content">
-                    <div class="hero-state-group">
-                      <div id="status-message" class="status-msg-slot" aria-live="polite">正在连接服务…</div>
-                      <span id="network-state-pill" class="glass-status-pill state-idle">
-                        <span class="state-dot" aria-hidden="true"></span>
-                        <span id="network-state-text">待机</span>
-                      </span>
-                      <span id="busy-pill" class="glass-pill pill-busy hidden" aria-live="assertive">处理中</span>
-                    </div>
-                    <div id="stable-info-text" class="hero-stable-text">--</div>
-                  </div>
+      <!-- 设置 -->
+      <section id="panel-config" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-config" hidden>
+        <form id="form-config" class="page stack" novalidate>
+          <section class="card">
+            <header class="card-head">
+              <h3 class="card-title">校园网</h3>
+              <span id="saved-account-pill" class="chip chip-muted">未设置账号</span>
+              <span id="autosave-state" class="autosave-state card-head-end" role="status" aria-live="polite">自动保存</span>
+            </header>
+            <div class="rows">
+              <div class="row">
+                <div class="row-text">
+                  <label for="cfg-ssid" class="row-title">网络名称</label>
+                  <span class="row-hint">校园网 SSID；留空则只使用备用 WiFi</span>
                 </div>
-
-                <div class="hero-actions-row">
-                  <button id="btn-toggle-service" class="btn-espresso" type="button">
-                    <span class="btn-label">--</span>
-                    <span class="btn-arrow-circle" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M5 12h14m-6-6 6 6-6 6"/>
-                      </svg>
-                    </span>
-                  </button>
-                  <button id="btn-check-now" class="btn-glass-action" type="button">
-                    <span class="btn-label">立即检测</span>
-                    <span class="btn-arrow-circle-subtle" aria-hidden="true">
-                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M20 7v5h-5M20 12a8 8 0 1 0-2 6"/>
-                      </svg>
-                    </span>
-                  </button>
+                <input type="text" id="cfg-ssid" name="ssid" class="input" maxlength="32" placeholder="NJUST" autocomplete="off">
+              </div>
+              <div id="campus-account" class="row-group">
+                <div class="row">
+                  <div class="row-text">
+                    <label for="cfg-username" class="row-title">认证账号</label>
+                    <span class="row-hint">学校门户的学号或账号</span>
+                  </div>
+                  <input type="text" id="cfg-username" name="username" class="input" placeholder="输入学号/账号" autocomplete="username">
                 </div>
-
-                <div class="metrics-grid">
-                  <div class="metric-slot">
-                    <div class="metric-head">
-                      <span class="metric-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <rect x="4" y="6" width="16" height="14" rx="2.5"/>
-                          <path d="M8 3.5v4m8-4v4M4 10.5h16"/>
-                        </svg>
-                      </span>
-                      <span class="m-label">稳定开始时间</span>
-                    </div>
-                    <span id="m-stable-since" class="m-val">--</span>
+                <div class="row">
+                  <div class="row-text">
+                    <label for="cfg-password" class="row-title">认证密码</label>
+                    <span class="row-hint">只发送到学校门户</span>
                   </div>
-
-                  <div class="metric-slot">
-                    <div class="metric-head">
-                      <span class="metric-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <circle cx="12" cy="12" r="8"/>
-                          <path d="M12 7.5v4.5l3 2"/>
-                        </svg>
-                      </span>
-                      <span class="m-label">上次检测时间</span>
-                    </div>
-                    <span id="m-checked-at" class="m-val">--</span>
-                  </div>
-
-                  <div class="metric-slot">
-                    <div class="metric-head">
-                      <span class="metric-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M7 3.5h10M7 20.5h10M8.5 3.5v3.8c0 2.7 7 6.3 7 9.4v3.8M15.5 3.5v3.8c0 2.7-7 6.3-7 9.4v3.8"/>
-                        </svg>
-                      </span>
-                      <span class="m-label">下次检测时间</span>
-                    </div>
-                    <span id="m-next-check-at" class="m-val">--</span>
-                  </div>
-
-                  <div class="metric-slot">
-                    <div class="metric-head">
-                      <span class="metric-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M20 7v5h-5"/>
-                          <path d="M20 12a8 8 0 1 0-2.3 5.7"/>
-                        </svg>
-                      </span>
-                      <span class="m-label">连续正常检测</span>
-                    </div>
-                    <span id="m-normal-count" class="m-val">0 次</span>
+                  <div class="password-input-group">
+                    <input type="password" id="cfg-password" name="password" class="input input-with-toggle" placeholder="输入认证密码" autocomplete="current-password">
+                    <button type="button" id="btn-toggle-campus-pwd" class="btn-toggle-eye" aria-label="显示密码" aria-pressed="false" title="显示/隐藏密码">
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                      </svg>
+                    </button>
                   </div>
                 </div>
               </div>
-
-              <div class="status-side">
-                <div class="glass-panel balance-panel" id="balance-card">
-                  <div class="panel-header-row">
-                    <span class="panel-label">校园网余额</span>
-                    <button id="btn-refresh-balance" class="btn-icon-glass" type="button" title="刷新余额" aria-label="刷新余额">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <path d="M20 5v5.5h-5.5"/>
-                        <path d="M20 10.5A8 8 0 1 0 18 17"/>
-                      </svg>
-                      <span>刷新</span>
-                    </button>
-                  </div>
-                  <div class="balance-display-zone">
-                    <span id="balance-val" class="balance-amount">—</span>
-                  </div>
-                  <div class="balance-meta-row">
-                    <span id="balance-state-pill" class="glass-status-pill pill-soft">就绪</span>
-                    <span id="balance-updated-text" class="balance-updated-hint">更新于 --</span>
-                  </div>
+              <div class="row">
+                <div class="row-text">
+                  <label for="cfg-interval" class="row-title">检测间隔</label>
+                  <span class="row-hint">每隔多少分钟检查一次网络</span>
                 </div>
-
-                <div class="glass-panel summary-card">
-                  <h2 class="card-heading">后台概览</h2>
-                  <dl class="summary-list">
-                    <div><dt>认证网络</dt><dd id="summary-campus">—</dd></div>
-                    <div><dt>备用队列</dt><dd id="summary-fallbacks">—</dd></div>
-                    <div><dt>守护程序</dt><dd id="summary-probes">—</dd></div>
-                    <div><dt>请求通路</dt><dd id="summary-path">—</dd></div>
-                  </dl>
-                  <div class="feature-tags">
-                    <span>自动认证</span>
-                    <span>代理兼容</span>
-                    <span>开关恢复</span>
-                  </div>
+                <div class="input-affix">
+                  <input type="number" id="cfg-interval" name="interval_minutes" class="input" required min="1" max="120" step="1" placeholder="10">
+                  <span class="affix" aria-hidden="true">分钟</span>
                 </div>
               </div>
             </div>
+          </section>
 
-            <div class="panel-foot-row">
-              <button id="btn-export-diag" class="btn-glass-action btn-sm" type="button">
-                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                  <polyline points="7 10 12 15 17 10"/>
-                  <line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-                <span>导出脱敏诊断</span>
+          <section class="card">
+            <header class="card-head">
+              <h3 class="card-title">运行方式</h3>
+            </header>
+            <div class="rows">
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">记住账号</span>
+                  <span class="row-hint">账号密码保存在本机，重启后仍可自动认证</span>
+                </span>
+                <input type="checkbox" id="cfg-remember" name="remember_credentials" class="switch">
+              </label>
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">开机启动</span>
+                  <span class="row-hint">登录 Windows 前即可联网；首次设置需管理员确认</span>
+                </span>
+                <input type="checkbox" id="cfg-startup" name="startup_enabled" class="switch">
+              </label>
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">启动后自动监控</span>
+                  <span class="row-hint">程序启动后自动开始检测与恢复</span>
+                </span>
+                <input type="checkbox" id="cfg-auto-monitor" name="auto_start_monitor" class="switch">
+              </label>
+            </div>
+          </section>
+
+          <section class="card" id="fallback-section">
+            <header class="card-head" id="fallback-head">
+              <h3 class="card-title">备用 WiFi</h3>
+              <span id="fallback-counter" class="chip chip-muted">0 / 8</span>
+              <button type="button" id="btn-add-fallback" class="btn btn-sm card-head-end" aria-label="添加备用网络">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                <span>添加</span>
               </button>
-            </div>
-          </div>
-        </section>
-
-        <!-- 设置页 -->
-        <section id="panel-config" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-config" hidden>
-          <form id="form-config" class="glass-panel" novalidate>
-            <div class="settings-card campus-settings">
-              <div class="card-header-row">
-                <h2 class="card-heading">校园网与认证</h2>
-                <span id="saved-account-pill" class="glass-pill pill-subtle">未设置账号</span>
-              </div>
-
-              <div class="form-slots-grid">
-                <div class="field-slot">
-                  <label for="cfg-ssid" class="slot-label">NJUST WIFI</label>
-                  <input type="text" id="cfg-ssid" name="ssid" class="glass-input" maxlength="32" placeholder="NJUST" autocomplete="off">
-                </div>
-
-                <div class="field-slot">
-                  <label for="cfg-interval" class="slot-label">检测间隔 (分钟)</label>
-                  <input type="number" id="cfg-interval" name="interval_minutes" class="glass-input" required min="1" max="120" step="1" placeholder="10">
-                </div>
-              </div>
-
-              <div class="account-slots-section">
-                <div class="form-slots-grid">
-                  <div class="field-slot">
-                    <label for="cfg-username" class="slot-label">认证账号</label>
-                    <input type="text" id="cfg-username" name="username" class="glass-input" placeholder="输入学号/账号" autocomplete="username">
-                  </div>
-
-                  <div class="field-slot">
-                    <label for="cfg-password" class="slot-label">认证密码</label>
-                    <div class="password-input-group">
-                      <input type="password" id="cfg-password" name="password" class="glass-input input-with-toggle" placeholder="输入认证密码" autocomplete="current-password">
-                      <button type="button" id="btn-toggle-campus-pwd" class="btn-toggle-eye" aria-label="显示密码" aria-pressed="false" title="显示/隐藏密码">
-                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" class="eye-icon" aria-hidden="true">
-                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                          <circle cx="12" cy="12" r="3"></circle>
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="switches-row">
-                <label class="glass-check-item">
-                  <input type="checkbox" id="cfg-remember" name="remember_credentials" class="glass-checkbox">
-                  <span>记住账号</span>
-                </label>
-
-                <label class="glass-check-item">
-                  <input type="checkbox" id="cfg-startup" name="startup_enabled" class="glass-checkbox">
-                  <span>开机启动</span>
-                </label>
-
-                <label class="glass-check-item">
-                  <input type="checkbox" id="cfg-auto-monitor" name="auto_start_monitor" class="glass-checkbox">
-                  <span>启动后自动监控</span>
-                </label>
-              </div>
-
-              <span id="autosave-state" class="autosave-state" role="status" aria-live="polite">自动保存</span>
-            </div>
-
-            <div class="settings-card fallback-settings">
-              <div class="fallback-networks-section">
-                <div class="section-title-row">
-                  <div class="section-title-wrap">
-                    <span class="slot-section-title">备用 WiFi</span>
-                  </div>
-                  <div class="section-actions-wrap">
-                    <span id="fallback-counter" class="glass-pill pill-soft">0 / 8</span>
-                    <button type="button" id="btn-add-fallback" class="btn-glass-action btn-sm" aria-label="添加备用网络">
-                      + 添加备用网络
-                    </button>
-                  </div>
-                </div>
-                <div id="fallback-networks-container" class="fallback-networks-container" role="region" aria-label="备用网络列表">
-                  <ul id="fallback-networks-list" class="fallback-networks-list" role="list">
-                    <!-- 由 app.js 动态渲染 -->
-                  </ul>
-                </div>
-              </div>
-            </div>
-
-            <div class="settings-card advanced-settings">
-              <details class="glass-details">
-                <summary class="glass-summary">
-                  <span class="summary-left">
-                    <span class="summary-accent" aria-hidden="true"></span>
-                    <span>高级设置</span>
-                  </span>
-                  <span class="summary-right">
-                    <span class="summary-hint">认证 · 网络 · 窗口</span>
-                    <svg class="summary-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <polyline points="6 9 12 15 18 9"/>
-                    </svg>
-                  </span>
-                </summary>
-
-                <div class="glass-details-body">
-                  <div class="form-slots-grid">
-                    <div class="field-slot">
-                      <label for="cfg-domain" class="slot-label" title="学校认证账号所属域，通常保持 default">认证域</label>
-                      <input type="text" id="cfg-domain" name="domain" class="glass-input" maxlength="64" placeholder="default" title="学校认证账号所属域，通常保持 default" autocomplete="off">
-                    </div>
-
-                    <div class="field-slot">
-                      <label for="cfg-timeout" class="slot-label">HTTP 超时 (毫秒)</label>
-                      <input type="number" id="cfg-timeout" name="connectivity_timeout_ms" class="glass-input" min="1000" max="30000" step="500" placeholder="5000">
-                    </div>
-                  </div>
-
-                  <div class="field-slot">
-                    <label for="cfg-checks" class="slot-label">探测地址</label>
-                    <textarea id="cfg-checks" name="connectivity_checks" class="glass-textarea" rows="2" placeholder="url|status|text;url|status|text" spellcheck="false"></textarea>
-                  </div>
-
-                  <div class="field-slot">
-                    <label for="cfg-close-behavior" class="slot-label">关闭窗口时</label>
-                    <select id="cfg-close-behavior" class="glass-input"><option value="ask">每次询问</option><option value="tray">关闭到托盘</option><option value="exit">退出程序</option></select>
-                  </div>
-                  <div class="switches-row switches-compact">
-                    <label class="glass-check-item">
-                      <input type="checkbox" id="cfg-show-portal" name="show_portal" class="glass-checkbox">
-                      <span title="尝试校园网认证时，用浏览器打开学校登录页；关闭后仍会自动认证">认证时打开学校登录页</span>
-                    </label>
-                  </div>
-                </div>
-              </details>
-            </div>
-          </form>
-        </section>
-
-        <!-- 守护页 -->
-        <section id="panel-probes" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-probes" hidden>
-          <div class="glass-panel probes-workspace">
-            <div class="proxy-card">
-              <div class="section-title-row">
-                <span class="slot-section-title">代理保护</span>
-                <div class="proxy-card-head-right">
-                  <button id="proxy-guide-open" type="button" class="btn-glass-action btn-xs">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <circle cx="12" cy="12" r="9"/>
-                      <path d="M9.6 9.3a2.4 2.4 0 0 1 4.6.8c0 1.6-2.2 2-2.2 3.3"/>
-                      <circle cx="12" cy="16.5" r=".7" fill="currentColor" stroke="none"/>
-                    </svg>
-                    <span>配置教程</span>
-                  </button>
-                  <span id="proxy-status" class="glass-pill pill-subtle">未启用</span>
-                </div>
-              </div>
-              <div class="proxy-actions"><label class="glass-check-item"><input id="proxy-fail-open" type="checkbox" class="glass-checkbox"><span>代理出口异常时关闭系统代理和 TUN</span></label><button id="proxy-check" type="button" class="btn-glass-action btn-sm">检测出口</button><button id="proxy-restore" type="button" class="btn-glass-action btn-sm" disabled>恢复代理</button></div>
-              <div class="proxy-actions"><label for="proxy-client">客户端</label><select id="proxy-client" class="glass-input"><option value="clash-verge">Clash Verge</option><option value="flclash">FlClash</option></select><button id="proxy-detect" type="button" class="btn-glass-action btn-sm">连接客户端</button></div>
-              <div class="proxy-actions"><label for="proxy-group">守护代理组</label><select id="proxy-group" class="glass-input"><option value="">未选择</option></select></div>
-              <p id="proxy-egress" class="proxy-note" hidden></p>
-
-              <details id="proxy-controller-details" class="proxy-controller-details">
-                <summary class="proxy-controller-summary">
-                  <span class="proxy-controller-summary-left">
-                    <span class="summary-accent" aria-hidden="true"></span>
-                    <span>外部控制器</span>
-                  </span>
-                  <span class="proxy-controller-summary-right">
-                    <span id="proxy-controller-mode" class="glass-pill pill-subtle">自动</span>
-                    <svg class="summary-chevron" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <polyline points="6 9 12 15 18 9"/>
-                    </svg>
-                  </span>
-                </summary>
-                <div class="proxy-controller-body">
-                  <div class="proxy-controller-grid">
-                    <div class="field-slot">
-                      <label for="proxy-controller-url" class="slot-label">API</label>
-                      <input id="proxy-controller-url" type="text" class="glass-input" placeholder="http://127.0.0.1:9097" autocomplete="off" spellcheck="false">
-                    </div>
-                    <div class="field-slot">
-                      <label for="proxy-controller-secret" class="slot-label">密钥</label>
-                      <input id="proxy-controller-secret" type="text" class="glass-input" autocomplete="off" spellcheck="false">
-                    </div>
-                    <button id="proxy-controller-reset" type="button" class="btn-glass-action btn-sm proxy-controller-reset">自动读取</button>
-                  </div>
-                </div>
-              </details>
-            </div>
-            <div class="probes-toolbar">
-              <div class="toolbar-left">
-                <label class="glass-check-item select-all-label">
-                  <input type="checkbox" id="check-all-probes" class="glass-checkbox">
-                  <span>全选</span>
-                </label>
-                <span id="probes-counter" class="glass-pill pill-soft">0/0 项</span>
-              </div>
-              <div class="toolbar-right">
-                <button id="btn-open-add-probe" class="btn-espresso btn-sm" type="button">
-                  + 添加程序
-                </button>
-                <button id="btn-elevate-probes" class="btn-glass-action btn-sm" type="button" disabled title="管理员权限运行">
-                  管理员启动
-                </button>
-                <button id="btn-remove-probes" class="btn-glass-action btn-sm btn-warn-text" type="button" disabled>
-                  移除选中
-                </button>
-                <button id="btn-clear-probes" class="btn-glass-action btn-sm" type="button">
-                  清空
-                </button>
-              </div>
-            </div>
-
-            <div class="probes-list-wrap" tabindex="0" role="region" aria-label="守护程序列表">
-              <ul id="probes-list" class="glass-items-list" role="list">
-                <li class="item-empty">暂无守护程序</li>
+            </header>
+            <p class="card-note">校园网不可用时按顺序尝试，靠前的优先。密码留空则复用 Windows 已保存的配置。</p>
+            <div id="fallback-networks-container" role="region" aria-label="备用网络列表">
+              <ul id="fallback-networks-list" class="fallback-networks-list" role="list">
+                <!-- 由 app.js 动态渲染 -->
               </ul>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- 日志页 -->
-        <section id="panel-logs" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-logs" hidden>
-          <div class="glass-panel logs-workspace">
-            <div class="logs-toolbar">
-              <div class="search-slot">
-                <svg class="search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <circle cx="11" cy="11" r="7"/>
-                  <path d="m20 20-3.5-3.5"/>
+          <section class="card card-flush">
+            <details class="disclosure">
+              <summary class="disclosure-summary">
+                <span class="card-title">高级设置</span>
+                <span class="disclosure-hint">认证 · 网络 · 窗口</span>
+                <svg class="disclosure-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6"/>
                 </svg>
-                <input type="text" id="log-search-input" class="glass-input search-input" placeholder="筛选关键词或日期..." aria-label="筛选日志关键词或日期" autocomplete="off">
-                <button id="btn-clear-search" class="btn-glass-action btn-xs hidden" type="button">清除</button>
+              </summary>
+              <div class="disclosure-body rows">
+                <div class="row">
+                  <div class="row-text">
+                    <label for="cfg-domain" class="row-title">认证域</label>
+                    <span class="row-hint">学校认证账号所属域，通常保持 default</span>
+                  </div>
+                  <input type="text" id="cfg-domain" name="domain" class="input" maxlength="64" placeholder="default" autocomplete="off">
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <label for="cfg-timeout" class="row-title">HTTP 超时</label>
+                    <span class="row-hint">单次联网探测的等待上限</span>
+                  </div>
+                  <div class="input-affix">
+                    <input type="number" id="cfg-timeout" name="connectivity_timeout_ms" class="input" min="1000" max="30000" step="500" placeholder="5000">
+                    <span class="affix" aria-hidden="true">毫秒</span>
+                  </div>
+                </div>
+                <div class="row row-stack">
+                  <div class="row-text">
+                    <label for="cfg-checks" class="row-title">探测地址</label>
+                    <span class="row-hint">格式 url|status|text，多个用分号分隔</span>
+                  </div>
+                  <textarea id="cfg-checks" name="connectivity_checks" class="input textarea" rows="2" placeholder="url|status|text;url|status|text" spellcheck="false"></textarea>
+                </div>
+                <div class="row">
+                  <div class="row-text">
+                    <label for="cfg-close-behavior" class="row-title">关闭窗口时</label>
+                    <span class="row-hint">留在托盘可继续守护网络</span>
+                  </div>
+                  <select id="cfg-close-behavior" class="input"><option value="ask">每次询问</option><option value="tray">关闭到托盘</option><option value="exit">退出程序</option></select>
+                </div>
+                <label class="row">
+                  <span class="row-text">
+                    <span class="row-title">认证时打开学校登录页</span>
+                    <span class="row-hint">额外用浏览器打开门户；关闭后仍会自动认证</span>
+                  </span>
+                  <input type="checkbox" id="cfg-show-portal" name="show_portal" class="switch">
+                </label>
               </div>
-              <input type="date" id="log-date-filter" class="glass-input log-date-input" aria-label="按日期筛选日志" title="按日期筛选">
-              <div class="logs-btns-group">
-                <button id="btn-open-logs-dir" class="btn-glass-action btn-sm" type="button">
-                  打开目录
-                </button>
-                <button id="btn-clear-logs" class="btn-glass-action btn-sm btn-warn-text" type="button">
-                  清空日志
-                </button>
+            </details>
+          </section>
+        </form>
+      </section>
+
+      <!-- 守护 -->
+      <section id="panel-probes" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-probes" hidden>
+        <div class="page stack">
+          <section class="card proxy-card">
+            <header class="card-head">
+              <h3 class="card-title">代理保护</h3>
+              <span id="proxy-status" class="card-sub">未启用</span>
+              <button id="proxy-guide-open" type="button" class="btn btn-sm btn-ghost card-head-end">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9"/>
+                  <path d="M9.6 9.3a2.4 2.4 0 0 1 4.6.8c0 1.6-2.2 2-2.2 3.3"/>
+                  <circle cx="12" cy="16.6" r=".8" fill="currentColor" stroke="none"/>
+                </svg>
+                <span>配置教程</span>
+              </button>
+            </header>
+            <div class="rows">
+              <div class="row">
+                <div class="row-text">
+                  <label for="proxy-client" class="row-title">客户端</label>
+                  <span class="row-hint">连接后可读取代理组并为程序设置分流</span>
+                </div>
+                <div class="row-control">
+                  <select id="proxy-client" class="input"><option value="clash-verge">Clash Verge</option><option value="flclash">FlClash</option></select>
+                  <button id="proxy-detect" type="button" class="btn btn-sm">连接客户端</button>
+                </div>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <label for="proxy-group" class="row-title">守护代理组</label>
+                  <span class="row-hint">「代理 / TUN」分流的程序走这个代理组</span>
+                </div>
+                <select id="proxy-group" class="input"><option value="">未选择</option></select>
+              </div>
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">代理出口异常时关闭系统代理和 TUN</span>
+                  <span class="row-hint">出口探测失败而 WiFi 直连正常时切换，不自动切回</span>
+                </span>
+                <input id="proxy-fail-open" type="checkbox" class="switch">
+              </label>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">代理出口</span>
+                  <span id="proxy-egress" class="row-hint" hidden></span>
+                </div>
+                <div class="row-control">
+                  <button id="proxy-check" type="button" class="btn btn-sm">检测出口</button>
+                  <button id="proxy-restore" type="button" class="btn btn-sm" disabled>恢复代理</button>
+                </div>
               </div>
             </div>
 
-            <div class="logs-scroll-slot" tabindex="0" role="region" aria-label="日志列表">
-              <ul id="logs-list" class="glass-logs-list" role="log" aria-live="polite">
-                <li class="item-empty">暂无日志</li>
-              </ul>
+            <details id="proxy-controller-details" class="disclosure disclosure-inset">
+              <summary class="disclosure-summary">
+                <span class="row-title">外部控制器</span>
+                <span id="proxy-controller-mode" class="chip chip-muted">自动</span>
+                <svg class="disclosure-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6"/>
+                </svg>
+              </summary>
+              <div class="disclosure-body controller-grid">
+                <div class="field">
+                  <label for="proxy-controller-url" class="slot-label">API</label>
+                  <input id="proxy-controller-url" type="text" class="input" placeholder="http://127.0.0.1:9097" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="field">
+                  <label for="proxy-controller-secret" class="slot-label">密钥</label>
+                  <input id="proxy-controller-secret" type="text" class="input" autocomplete="off" spellcheck="false">
+                </div>
+                <button id="proxy-controller-reset" type="button" class="btn btn-sm">自动读取</button>
+              </div>
+            </details>
+          </section>
+
+          <section class="card probes-card">
+            <header class="card-head">
+              <h3 class="card-title">程序守护</h3>
+              <span id="probes-counter" class="chip chip-muted">0/0 项</span>
+              <div class="card-head-end toolbar">
+                <button id="btn-elevate-probes" class="btn btn-sm" type="button" disabled title="管理员权限运行">管理员启动</button>
+                <button id="btn-remove-probes" class="btn btn-sm btn-danger" type="button" disabled>移除选中</button>
+                <button id="btn-clear-probes" class="btn btn-sm" type="button">清空</button>
+                <button id="btn-open-add-probe" class="btn btn-sm btn-primary" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                  <span>添加程序</span>
+                </button>
+              </div>
+            </header>
+            <p class="card-note">已添加的程序退出后会尝试重新拉起，并可分别选择网络方式。</p>
+            <label class="select-all">
+              <input type="checkbox" id="check-all-probes" class="check">
+              <span>全选</span>
+            </label>
+            <ul id="probes-list" class="item-list" role="list" aria-label="守护程序列表">
+              <li class="item-empty">暂无守护程序</li>
+            </ul>
+          </section>
+        </div>
+      </section>
+
+      <!-- 日志 -->
+      <section id="panel-logs" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-logs" hidden>
+        <div class="page logs-page">
+          <div class="logs-toolbar">
+            <div class="search">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="7"/>
+                <path d="m20 20-3.5-3.5"/>
+              </svg>
+              <input type="text" id="log-search-input" class="input search-input" placeholder="筛选关键词或日期" aria-label="筛选日志关键词或日期" autocomplete="off">
+              <button id="btn-clear-search" class="btn btn-xs search-clear hidden" type="button">清除</button>
             </div>
+            <input type="date" id="log-date-filter" class="input log-date-input" aria-label="按日期筛选日志" title="按日期筛选">
+            <button id="btn-open-logs-dir" class="btn btn-sm" type="button">打开目录</button>
+            <button id="btn-clear-logs" class="btn btn-sm btn-danger" type="button">清空日志</button>
           </div>
-        </section>
-      </main>
-    </div>
+
+          <div class="card logs-card" tabindex="0" role="region" aria-label="日志列表">
+            <ul id="logs-list" class="logs-list" role="log" aria-live="polite">
+              <li class="item-empty">暂无日志</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="conn-state-pill" class="chip chip-soft">服务就绪</span>
+      <span class="statusbar-item"><span class="statusbar-label">网络监控</span><span id="running-state-pill" class="chip chip-muted">--</span></span>
+      <span id="version-text" class="statusbar-version">v--</span>
+    </footer>
   </div>
 
-  <dialog id="modal-update" class="glass-modal" aria-labelledby="update-title">
-    <div class="glass-modal-card">
-      <div class="modal-head"><h3 id="update-title" class="modal-title">软件更新</h3><button id="btn-close-update" class="modal-close-btn" type="button" aria-label="关闭更新">&times;</button></div>
-      <p id="update-message" class="confirm-desc-text">检查新版本</p>
+  <dialog id="modal-update" class="modal" aria-labelledby="update-title">
+    <div class="modal-card">
+      <div class="modal-head"><h3 id="update-title" class="modal-title">软件更新</h3><button id="btn-close-update" class="modal-close" type="button" aria-label="关闭更新">&times;</button></div>
+      <p id="update-message" class="modal-text">检查新版本</p>
       <progress id="update-progress" max="100" value="0" hidden aria-label="下载进度"></progress>
-      <div class="modal-actions-row"><button id="btn-update-cancel" class="btn-glass-action" type="button">关闭</button><button id="btn-update-action" class="btn-espresso" type="button">检查更新</button></div>
+      <div class="modal-actions"><button id="btn-update-cancel" class="btn" type="button">关闭</button><button id="btn-update-action" class="btn btn-primary" type="button">检查更新</button></div>
     </div>
   </dialog>
 
-  <!-- 添加程序模态对话框 -->
-  <dialog id="modal-add-probe" class="glass-modal" aria-labelledby="modal-add-probe-title">
-    <div class="glass-modal-card">
+  <dialog id="modal-add-probe" class="modal modal-wide" aria-labelledby="modal-add-probe-title">
+    <div class="modal-card">
       <div class="modal-head">
         <h3 id="modal-add-probe-title" class="modal-title">添加守护程序</h3>
-        <button id="btn-close-probe-modal" class="modal-close-btn" type="button" aria-label="关闭">&times;</button>
+        <button id="btn-close-probe-modal" class="modal-close" type="button" aria-label="关闭">&times;</button>
       </div>
-
-      <div class="modal-browse-row">
-        <span class="modal-tip">勾选候选应用或从本地选择 EXE：</span>
-        <button id="btn-browse-file" class="btn-glass-action btn-sm" type="button">
-          浏览本地文件...
-        </button>
+      <div class="modal-browse">
+        <span class="modal-text">勾选候选应用，或从本地选择 EXE</span>
+        <button id="btn-browse-file" class="btn btn-sm" type="button">浏览本地文件…</button>
       </div>
-
-      <div class="candidates-scroll-slot" tabindex="0" role="region" aria-label="候选程序列表">
-        <ul id="candidates-list" class="candidates-items-list">
+      <div class="candidates-scroll" tabindex="0" role="region" aria-label="候选程序列表">
+        <ul id="candidates-list" class="item-list">
           <li class="item-empty">加载候选程序中...</li>
         </ul>
       </div>
-
-      <div class="modal-actions-row">
-        <button id="btn-cancel-add-probe" class="btn-glass-action" type="button">取消</button>
-        <button id="btn-confirm-add-probe" class="btn-espresso" type="button">
+      <div class="modal-actions">
+        <button id="btn-cancel-add-probe" class="btn" type="button">取消</button>
+        <button id="btn-confirm-add-probe" class="btn btn-primary" type="button">
           <span class="btn-label">确认添加</span>
         </button>
       </div>
     </div>
   </dialog>
 
-  <!-- 通用确认模态对话框 -->
-  <dialog id="modal-confirm" class="glass-modal" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-desc">
-    <div class="glass-modal-card confirm-modal-card">
-      <div class="confirm-head">
-        <span class="confirm-badge-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="9"/>
-            <path d="M12 8v5"/>
-            <circle cx="12" cy="16" r=".6" fill="currentColor" stroke="none"/>
-          </svg>
-        </span>
-        <h3 id="confirm-dialog-title" class="modal-title">请确认</h3>
-      </div>
-      <p id="confirm-dialog-desc" class="confirm-desc-text">确定要执行此操作吗？</p>
-      <div class="modal-actions-row">
-        <button id="btn-confirm-cancel" class="btn-glass-action" type="button">取消</button>
-        <button id="btn-confirm-ok" class="btn-espresso" type="button">
+  <dialog id="modal-confirm" class="modal" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-desc">
+    <div class="modal-card">
+      <h3 id="confirm-dialog-title" class="modal-title">请确认</h3>
+      <p id="confirm-dialog-desc" class="modal-text">确定要执行此操作吗？</p>
+      <div class="modal-actions">
+        <button id="btn-confirm-cancel" class="btn" type="button">取消</button>
+        <button id="btn-confirm-ok" class="btn btn-primary" type="button">
           <span class="btn-label">确定</span>
         </button>
       </div>
     </div>
   </dialog>
 
-  <dialog id="modal-close" class="glass-modal" aria-labelledby="close-title">
-    <div class="glass-modal-card confirm-modal-card">
+  <dialog id="modal-close" class="modal" aria-labelledby="close-title">
+    <div class="modal-card">
       <h3 id="close-title" class="modal-title">准备休息了吗？</h3>
-      <p class="confirm-desc-text">留在托盘，继续守护网络。</p>
-      <label class="glass-check-item"><input id="close-remember" type="checkbox" class="glass-checkbox"><span>记住我的选择</span></label>
-      <div class="modal-actions-row"><button id="close-cancel" class="btn-glass-action" type="button">取消</button><button id="close-exit" class="btn-glass-action" type="button">退出程序</button><button id="close-tray" class="btn-espresso" type="button">关闭到托盘</button></div>
+      <p class="modal-text">留在托盘，继续守护网络。</p>
+      <label class="check-label"><input id="close-remember" type="checkbox" class="check"><span>记住我的选择</span></label>
+      <div class="modal-actions"><button id="close-cancel" class="btn btn-ghost" type="button">取消</button><button id="close-exit" class="btn" type="button">退出程序</button><button id="close-tray" class="btn btn-primary" type="button">关闭到托盘</button></div>
     </div>
   </dialog>
 
-  <dialog id="modal-proxy-guide" class="glass-modal proxy-guide-modal" aria-labelledby="proxy-guide-title">
-    <div class="glass-modal-card proxy-guide-card">
+  <dialog id="modal-proxy-guide" class="modal proxy-guide-modal" aria-labelledby="proxy-guide-title">
+    <div class="modal-card proxy-guide-card">
       <div class="modal-head">
         <div class="guide-head-title-wrap">
           <h3 id="proxy-guide-title" class="modal-title">外部控制配置教程</h3>
-          <span id="proxy-guide-step-badge" class="glass-pill guide-step-badge">步骤 1 / 3</span>
+          <span id="proxy-guide-step-badge" class="chip chip-muted guide-step-badge">步骤 1 / 3</span>
         </div>
-        <button id="proxy-guide-close" class="modal-close-btn" type="button" aria-label="关闭教程">&times;</button>
+        <button id="proxy-guide-close" class="modal-close" type="button" aria-label="关闭教程">&times;</button>
       </div>
 
       <div class="guide-client-tabs" role="tablist" aria-label="选择代理客户端">
@@ -599,24 +555,24 @@
       <div class="guide-footer">
         <div id="proxy-guide-dots" class="guide-dots" aria-hidden="true"></div>
         <div class="guide-footer-actions">
-          <button id="proxy-guide-prev" type="button" class="btn-glass-action btn-sm">上一页</button>
-          <button id="proxy-guide-go" type="button" class="btn-glass-action btn-sm guide-go-btn" hidden>去配置</button>
-          <button id="proxy-guide-next" type="button" class="btn-espresso btn-sm">下一页</button>
+          <button id="proxy-guide-prev" type="button" class="btn btn-sm">上一页</button>
+          <button id="proxy-guide-go" type="button" class="btn btn-sm" hidden>去配置</button>
+          <button id="proxy-guide-next" type="button" class="btn btn-sm btn-primary">下一页</button>
         </div>
       </div>
     </div>
   </dialog>
 
-  <dialog id="modal-proxy-guide-zoom" class="glass-modal proxy-guide-zoom-modal" aria-labelledby="proxy-guide-zoom-title">
-    <div class="glass-modal-card proxy-guide-zoom-card">
+  <dialog id="modal-proxy-guide-zoom" class="modal proxy-guide-zoom-modal" aria-labelledby="proxy-guide-zoom-title">
+    <div class="modal-card proxy-guide-zoom-card">
       <div class="modal-head">
         <div class="guide-head-title-wrap">
-          <span id="proxy-guide-zoom-client" class="glass-pill pill-soft">Clash Verge</span>
+          <span id="proxy-guide-zoom-client" class="chip chip-muted">Clash Verge</span>
           <h3 id="proxy-guide-zoom-title" class="modal-title"></h3>
         </div>
         <div class="guide-zoom-head-actions">
-          <button id="proxy-guide-zoom-toggle" type="button" class="btn-glass-action btn-xs" aria-pressed="false">1.5× 细节</button>
-          <button id="proxy-guide-zoom-close" class="modal-close-btn" type="button" aria-label="关闭放大视图">&times;</button>
+          <button id="proxy-guide-zoom-toggle" type="button" class="btn btn-xs" aria-pressed="false">1.5× 细节</button>
+          <button id="proxy-guide-zoom-close" class="modal-close" type="button" aria-label="关闭放大视图">&times;</button>
         </div>
       </div>
       <div id="proxy-guide-zoom-stage" class="guide-zoom-stage">
