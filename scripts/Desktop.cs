@@ -103,6 +103,10 @@ internal sealed class DesktopWindow : GlassWindow
     private bool initializing;
     private bool allowClose, exiting, pageReady;
     private bool? maximized;
+    private bool sizingReady;
+    private string sizingScreen;
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowRectangle { public int Left, Top, Right, Bottom; }
     protected override bool ShowWithoutActivation { get { return Program.BackgroundStart; } }
 
     private async void SyncWindowState()
@@ -118,8 +122,11 @@ internal sealed class DesktopWindow : GlassWindow
 
     internal DesktopWindow()
     {
-        Text = "NJUST WiFi"; Width = 1120; Height = 780;
-        MinimumSize = new Size(860, 620); StartPosition = FormStartPosition.CenterScreen;
+        // WebView uses logical pixels. WinForms bounds are physical pixels in
+        // this per-monitor-DPI-aware process; apply the conversion explicitly.
+        AutoScaleMode = AutoScaleMode.None;
+        Text = "NJUST WiFi";
+        StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(242, 242, 239);
         loading = new Label { Text = "正在启动…", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Microsoft YaHei UI", 12) };
         Content.Controls.Add(loading);
@@ -147,6 +154,67 @@ internal sealed class DesktopWindow : GlassWindow
             showSignal.Dispose();
             ReleaseView();
         };
+    }
+
+    internal static Size WindowSizeForDpi(Size logical, int dpi, Size workingArea)
+    {
+        double scale = Math.Max(96, dpi) / 96.0;
+        return new Size(Math.Max(1, Math.Min(workingArea.Width, (int)Math.Round(logical.Width * scale))),
+                        Math.Max(1, Math.Min(workingArea.Height, (int)Math.Round(logical.Height * scale))));
+    }
+
+    private void UpdateWindowLimits(Screen screen, int dpi)
+    {
+        sizingScreen = screen.DeviceName;
+        MinimumSize = WindowSizeForDpi(new Size(860, 620), dpi, screen.WorkingArea.Size);
+        MaximizedBounds = screen.WorkingArea;
+        Padding = new Padding(Math.Max(5, dpi * 5 / 96));
+    }
+
+    protected override void OnLoad(EventArgs e)
+    {
+        var screen = Screen.FromControl(this);
+        UpdateWindowLimits(screen, WindowDpi);
+        Size = WindowSizeForDpi(new Size(1120, 780), WindowDpi, screen.WorkingArea.Size);
+        Location = new Point(screen.WorkingArea.Left + (screen.WorkingArea.Width - Width) / 2,
+                             screen.WorkingArea.Top + (screen.WorkingArea.Height - Height) / 2);
+        sizingReady = true;
+        base.OnLoad(e);
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == 0x02E0 && sizingReady) // WM_DPICHANGED
+        {
+            // Handle the native message: this minimal shell does not opt into
+            // WinForms automatic scaling, so its managed DpiChanged may not fire.
+            var rect = (WindowRectangle)Marshal.PtrToStructure(m.LParam, typeof(WindowRectangle));
+            var suggested = Rectangle.FromLTRB(rect.Left, rect.Top, rect.Right, rect.Bottom);
+            var screen = Screen.FromRectangle(suggested);
+            UpdateWindowLimits(screen, (int)(m.WParam.ToInt64() & 0xffff));
+            if (WindowState == FormWindowState.Normal)
+            {
+                var area = screen.WorkingArea;
+                var size = new Size(Math.Max(MinimumSize.Width, Math.Min(area.Width, suggested.Width)),
+                                    Math.Max(MinimumSize.Height, Math.Min(area.Height, suggested.Height)));
+                Bounds = new Rectangle(new Point(Math.Max(area.Left, Math.Min(suggested.Left, area.Right - size.Width)),
+                                                 Math.Max(area.Top, Math.Min(suggested.Top, area.Bottom - size.Height))), size);
+            }
+            m.Result = IntPtr.Zero;
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
+    protected override void OnLocationChanged(EventArgs e)
+    {
+        base.OnLocationChanged(e);
+        if (!sizingReady) return;
+        var screen = Screen.FromControl(this);
+        if (sizingScreen == screen.DeviceName) return;
+        UpdateWindowLimits(screen, WindowDpi);
+        if (WindowState == FormWindowState.Normal)
+            Size = new Size(Math.Min(Width, screen.WorkingArea.Width), Math.Min(Height, screen.WorkingArea.Height));
     }
 
     private void ToTray()
@@ -251,7 +319,7 @@ internal sealed class DesktopWindow : GlassWindow
                     await Task.Delay(1200);
                     if (view == null) return;
                     // Only booleans/version for isolated QA, never account or balance values.
-                    string report = await core.ExecuteScriptAsync("JSON.stringify({title:document.title,version:document.querySelector('#version-text').textContent,settings:!!document.querySelector('#form-config'),balance:!!document.querySelector('#balance-val'),origin:location.origin})");
+                    string report = await core.ExecuteScriptAsync("JSON.stringify({title:document.title,version:document.querySelector('#version-text').textContent,settings:!!document.querySelector('#form-config'),balance:!!document.querySelector('#balance-val'),origin:location.origin,viewportWidth:innerWidth,viewportHeight:innerHeight,pixelRatio:devicePixelRatio,nativeDpi:" + WindowDpi + ",minimumWidth:" + MinimumSize.Width + ",minimumHeight:" + MinimumSize.Height + "})");
                     File.WriteAllText(Program.QaReport, report);
                 }
             };

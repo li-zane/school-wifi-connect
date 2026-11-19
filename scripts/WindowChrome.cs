@@ -8,8 +8,19 @@ internal class GlassWindow : Form
 {
     [DllImport("user32.dll")] private static extern bool ReleaseCapture();
     [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr hwnd, int message, IntPtr wparam, IntPtr lparam);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
     protected readonly Panel Content = new Panel { Dock = DockStyle.Fill };
     private Color border = Color.FromArgb(222, 222, 218);
+    // DeviceDpi can remain 96 in a framework shell without a WinForms DPI
+    // app.config, even when its WebView and HWND are per-monitor DPI aware.
+    protected int WindowDpi
+    {
+        get {
+            try { if (IsHandleCreated) { int dpi = (int)GetDpiForWindow(Handle); if (dpi > 0) return dpi; } }
+            catch (EntryPointNotFoundException) { }
+            return DeviceDpi;
+        }
+    }
     protected GlassWindow()
     {
         FormBorderStyle = FormBorderStyle.None;
@@ -49,8 +60,8 @@ internal class GlassWindow : Form
         {
             long position = m.LParam.ToInt64();
             Point p = PointToClient(new Point((short)(position & 0xffff), (short)((position >> 16) & 0xffff)));
-            int edge = Math.Max(5, DeviceDpi * 5 / 96);
-            int corner = Math.Max(28, DeviceDpi * 28 / 96);
+            int edge = Math.Max(5, WindowDpi * 5 / 96);
+            int corner = Math.Max(28, WindowDpi * 28 / 96);
             if (p.X >= ClientSize.Width - corner && p.Y >= ClientSize.Height - corner &&
                 p.X < ClientSize.Width && p.Y < ClientSize.Height)
             { m.Result = new IntPtr(17); return; }
