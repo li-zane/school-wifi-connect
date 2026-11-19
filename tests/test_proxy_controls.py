@@ -1,8 +1,10 @@
 """Proxy controls use isolated files, fake switches and a fake local core only."""
 from copy import deepcopy
 from contextlib import closing
+import io
 import itertools
 import json
+import logging
 import os
 from pathlib import Path
 import sqlite3
@@ -12,8 +14,6 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 import urllib.parse
-
-import pytest
 
 from njust_wifi.client_control import ClientControlError, ClientSwitches
 from njust_wifi.proxy import ControllerError, ProxyProtection, SwitchStateError, default_fallback
@@ -30,51 +30,80 @@ def settings(order=None, **enabled):
     return value
 
 
-@pytest.mark.parametrize('raw', [None, [], {}, {'order': []},
+class TempDirTestCase(unittest.TestCase):
+    """A fresh directory per test (fresh_dir() for each parametrized case) and
+    the log text written meanwhile, which must stay free of private data."""
+    def setUp(self):
+        self.tmp_path = self.fresh_dir()
+        self.log = io.StringIO()
+        handler = logging.StreamHandler(self.log)
+        root = logging.getLogger()
+        self.addCleanup(root.setLevel, root.level)
+        self.addCleanup(root.removeHandler, handler)
+        root.addHandler(handler)
+        root.setLevel(logging.DEBUG)
+
+    def fresh_dir(self):
+        temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(temp.cleanup)
+        return Path(temp.name)
+
+    def assert_private_free(self, reply):
+        text = json.dumps(reply) + self.log.getvalue()
+        for private in ('https://subscription.invalid', 'private-token', 'private-profile-path',
+                        'selected-private-id', 'age-secret-fixture', 'url', 'uid'):
+            self.assertNotIn(private, text)
+
+
+INVALID_FALLBACKS = [None, [], {}, {'order': []},
     {'order': ['switch_node'] * 3, 'enabled': default_fallback()['enabled']},
     {'order': [{}, 'close_tun', 'close_proxy'], 'enabled': default_fallback()['enabled']},
     {'order': list(default_fallback()['order']), 'enabled': []},
     settings(switch_node=1), settings(close_tun='true'),
     default_fallback() | {'extra': True},
     {'order': tuple(default_fallback()['order']), 'enabled': default_fallback()['enabled']},
-    {'order': list(default_fallback()['order']), 'enabled': {'switch_node': False}}])
-def test_invalid_fallback_is_rejected_and_disk_falls_back(tmp_path, raw):
-    proxy = ProxyProtection(tmp_path, demo=True)
-    with pytest.raises(ValueError, match='故障处置设置格式不正确'):
-        proxy.set_fallback(raw)
-    assert not proxy.path.exists()
-    proxy.path.write_text(json.dumps({'options': {'fallback': raw}}), encoding='utf-8')
-    assert ProxyProtection(tmp_path, demo=True).fallback == default_fallback()
+    {'order': list(default_fallback()['order']), 'enabled': {'switch_node': False}}]
 
 
-def test_fallback_persists_globally_and_returns_independent_copies(tmp_path):
-    proxy = ProxyProtection(tmp_path, demo=True)
-    value = settings(['close_proxy', 'switch_node', 'close_tun'], switch_node=True, close_tun=False)
-    reply = proxy.set_fallback(value)
-    proxy.set_options({'auto_restore': True})
-    proxy.set_client('flclash')
-    reopened = ProxyProtection(tmp_path, demo=True)
-    assert reopened.fallback == value
-    assert reopened.auto_restore
-    value['order'].reverse()
-    reply['fallback']['enabled']['close_tun'] = True
-    status = proxy.status()
-    status['fallback']['order'].clear()
-    assert reopened.fallback == proxy.fallback
+class FallbackSettingsTests(TempDirTestCase):
+    def test_invalid_fallback_is_rejected_and_disk_falls_back(self):
+        for raw in INVALID_FALLBACKS:
+            with self.subTest(raw=raw):
+                root = self.fresh_dir()
+                proxy = ProxyProtection(root, demo=True)
+                with self.assertRaisesRegex(ValueError, '故障处置设置格式不正确'):
+                    proxy.set_fallback(raw)
+                self.assertFalse(proxy.path.exists())
+                proxy.path.write_text(json.dumps({'options': {'fallback': raw}}), encoding='utf-8')
+                self.assertEqual(ProxyProtection(root, demo=True).fallback, default_fallback())
 
+    def test_fallback_persists_globally_and_returns_independent_copies(self):
+        proxy = ProxyProtection(self.tmp_path, demo=True)
+        value = settings(['close_proxy', 'switch_node', 'close_tun'], switch_node=True, close_tun=False)
+        reply = proxy.set_fallback(value)
+        proxy.set_options({'auto_restore': True})
+        proxy.set_client('flclash')
+        reopened = ProxyProtection(self.tmp_path, demo=True)
+        self.assertEqual(reopened.fallback, value)
+        self.assertTrue(reopened.auto_restore)
+        value['order'].reverse()
+        reply['fallback']['enabled']['close_tun'] = True
+        status = proxy.status()
+        status['fallback']['order'].clear()
+        self.assertEqual(reopened.fallback, proxy.fallback)
 
-def test_bad_settings_file_and_missing_options_keep_defaults(tmp_path):
-    for content in ('{bad', '{}', '[]', '{"options": []}'):
-        (tmp_path / 'routing-settings.json').write_text(content, encoding='utf-8')
-        assert ProxyProtection(tmp_path, demo=True).fallback == default_fallback()
+    def test_bad_settings_file_and_missing_options_keep_defaults(self):
+        for content in ('{bad', '{}', '[]', '{"options": []}'):
+            with self.subTest(content=content):
+                (self.tmp_path / 'routing-settings.json').write_text(content, encoding='utf-8')
+                self.assertEqual(ProxyProtection(self.tmp_path, demo=True).fallback, default_fallback())
 
-
-def test_failed_fallback_save_preserves_previous_value(tmp_path):
-    proxy = ProxyProtection(tmp_path, demo=True)
-    with patch.object(proxy, 'save', side_effect=OSError('private path')):
-        with pytest.raises(ValueError, match='保存未完成'):
-            proxy.set_fallback(settings(switch_node=True))
-    assert proxy.fallback == default_fallback()
+    def test_failed_fallback_save_preserves_previous_value(self):
+        proxy = ProxyProtection(self.tmp_path, demo=True)
+        with patch.object(proxy, 'save', side_effect=OSError('private path')):
+            with self.assertRaisesRegex(ValueError, '保存未完成'):
+                proxy.set_fallback(settings(switch_node=True))
+        self.assertEqual(proxy.fallback, default_fallback())
 
 
 class ControlFixture(unittest.TestCase):
@@ -335,13 +364,14 @@ class IndependentSwitchTests(ControlFixture):
         self.assertEqual(self.proxy.message, '直连也未通过，保留代理设置')
 
 
-def test_bridge_preserves_only_fixed_message_and_error_code(tmp_path):
-    switch = ClientSwitches(tmp_path, 'clash-verge')
-    reply = Mock(returncode=1, stdout=b'{"ok":false,"error":"switch_disabled"}')
-    with patch.object(switch, '_executable', return_value=Path('fixture.exe')), patch('subprocess.run', return_value=reply):
-        with pytest.raises(ClientControlError) as error:
-            switch.set('tun', False, True)
-    assert error.value.code == 'switch_disabled'
+class BridgeErrorTests(TempDirTestCase):
+    def test_bridge_preserves_only_fixed_message_and_error_code(self):
+        switch = ClientSwitches(self.tmp_path, 'clash-verge')
+        reply = Mock(returncode=1, stdout=b'{"ok":false,"error":"switch_disabled"}')
+        with patch.object(switch, '_executable', return_value=Path('fixture.exe')), patch('subprocess.run', return_value=reply):
+            with self.assertRaises(ClientControlError) as error:
+                switch.set('tun', False, True)
+        self.assertEqual(error.exception.code, 'switch_disabled')
 
 
 class NodeSwitchTests(unittest.TestCase):
@@ -612,77 +642,84 @@ items:
     path.write_text(text, encoding='utf-8')
 
 
-def assert_private_free(reply, caplog):
-    text = json.dumps(reply) + caplog.text
-    for private in ('https://subscription.invalid', 'private-token', 'private-profile-path',
-                    'selected-private-id', 'age-secret-fixture', 'url', 'uid'):
-        assert private not in text
-
-
-def test_verge_allowlist_ignores_even_malformed_private_values(tmp_path, caplog):
-    verge_fixture(tmp_path / 'profiles.yaml')
-    reply = SubscriptionReader().read('clash-verge', tmp_path)
-    assert reply == {'client': 'clash-verge', 'available': True, 'name': '示例订阅', 'kind': 'remote',
-                     'updated_at': '2023-11-14T22:13:20+00:00',
-                     'usage': {'used': 30, 'total': 100, 'expire': ''}, 'message': ''}
-    assert_private_free(reply, caplog)
-
-
-@pytest.mark.parametrize('indent', ['', '  '])
-def test_verge_both_sequence_indents_and_single_quotes(tmp_path, indent):
-    text = "current: 'id'\nitems:\n" + indent + "- uid: id\n" + indent + "  type: remote\n" + indent + "  name: 'A ''quoted'' name'\n"
-    (tmp_path / 'profiles.yaml').write_text(text, encoding='utf-8')
-    reply = SubscriptionReader().read('clash-verge', tmp_path)
-    assert reply['name'] == "A 'quoted' name"
-    assert reply['usage'] is None
-
-
-def test_verge_cache_uses_mtime_and_does_not_return_mutable_internal_state(tmp_path):
-    path = tmp_path / 'profiles.yaml'
-    verge_fixture(path)
-    reader = SubscriptionReader()
-    first = reader.read('clash-verge', tmp_path)
-    first['usage']['used'] = 999
-    with patch('njust_wifi.subscription._verge', side_effect=AssertionError('cached data must not be reparsed')):
-        assert reader.read('clash-verge', tmp_path)['usage']['used'] == 30
-    verge_fixture(path, name='Changed')
-    os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1000000))
-    assert reader.read('clash-verge', tmp_path)['name'] == 'Changed'
-
-
-@pytest.mark.parametrize('content', ['', 'broken', 'current: id\nitems: [bad]',
+BAD_VERGE = ['', 'broken', 'current: id\nitems: [bad]',
     'current: id\nitems:\n- uid: id\n  type: remote\n  name: "broken',
     'current: id\nitems:\n- uid: id\n  type: remote\n  name: a\n  name: b',
-    'current: id\nitems:\n- uid: id\n  type: remote\n  name: a\n  updated: bad'])
-def test_bad_verge_returns_unavailable_without_private_error_text(tmp_path, caplog, content):
-    (tmp_path / 'profiles.yaml').write_text(content, encoding='utf-8')
-    reply = SubscriptionReader().read('clash-verge', tmp_path)
-    assert not reply['available']
-    assert_private_free(reply, caplog)
+    'current: id\nitems:\n- uid: id\n  type: remote\n  name: a\n  updated: bad']
 
 
-def test_local_and_unknown_profiles_hide_all_summary_fields(tmp_path):
-    for kind in ('local', 'script'):
-        verge_fixture(tmp_path / 'profiles.yaml', kind=kind)
-        reply = SubscriptionReader().read('clash-verge', tmp_path)
-        assert not reply['available']
-        assert reply['name'] == reply['kind'] == ''
-        assert reply['updated_at'] is reply['usage'] is None
-        if kind == 'local':
-            assert reply['message'] == '当前使用本地配置'
+class VergeSubscriptionTests(TempDirTestCase):
+    def test_verge_allowlist_ignores_even_malformed_private_values(self):
+        verge_fixture(self.tmp_path / 'profiles.yaml')
+        reply = SubscriptionReader().read('clash-verge', self.tmp_path)
+        self.assertEqual(reply, {'client': 'clash-verge', 'available': True, 'name': '示例订阅', 'kind': 'remote',
+                                 'updated_at': '2023-11-14T22:13:20+00:00',
+                                 'usage': {'used': 30, 'total': 100, 'expire': ''}, 'message': ''})
+        self.assert_private_free(reply)
 
+    def test_verge_both_sequence_indents_and_single_quotes(self):
+        for indent in ('', '  '):
+            with self.subTest(indent=indent):
+                root = self.fresh_dir()
+                text = "current: 'id'\nitems:\n" + indent + "- uid: id\n" + indent + "  type: remote\n" + indent + "  name: 'A ''quoted'' name'\n"
+                (root / 'profiles.yaml').write_text(text, encoding='utf-8')
+                reply = SubscriptionReader().read('clash-verge', root)
+                self.assertEqual(reply['name'], "A 'quoted' name")
+                self.assertIsNone(reply['usage'])
 
-def test_subscription_name_is_bounded_and_control_characters_are_removed(tmp_path):
-    name = json.dumps('x' * 140 + '\x00\n\u200b', ensure_ascii=False)
-    verge_fixture(tmp_path / 'profiles.yaml', name=name, extra=False)
-    assert SubscriptionReader().read('clash-verge', tmp_path)['name'] == 'x' * 128
+    def test_verge_cache_uses_mtime_and_does_not_return_mutable_internal_state(self):
+        path = self.tmp_path / 'profiles.yaml'
+        verge_fixture(path)
+        reader = SubscriptionReader()
+        first = reader.read('clash-verge', self.tmp_path)
+        first['usage']['used'] = 999
+        with patch('njust_wifi.subscription._verge', side_effect=AssertionError('cached data must not be reparsed')):
+            self.assertEqual(reader.read('clash-verge', self.tmp_path)['usage']['used'], 30)
+        verge_fixture(path, name='Changed')
+        os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1000000))
+        self.assertEqual(reader.read('clash-verge', self.tmp_path)['name'], 'Changed')
 
+    def test_bad_verge_returns_unavailable_without_private_error_text(self):
+        for content in BAD_VERGE:
+            with self.subTest(content=content):
+                root = self.fresh_dir()
+                (root / 'profiles.yaml').write_text(content, encoding='utf-8')
+                reply = SubscriptionReader().read('clash-verge', root)
+                self.assertFalse(reply['available'])
+                self.assert_private_free(reply)
 
-def test_missing_file_cache_notices_new_subscription(tmp_path):
-    reader = SubscriptionReader()
-    assert not reader.read('clash-verge', tmp_path)['available']
-    verge_fixture(tmp_path / 'profiles.yaml')
-    assert reader.read('clash-verge', tmp_path)['available']
+    def test_local_and_unknown_profiles_hide_all_summary_fields(self):
+        for kind in ('local', 'script'):
+            with self.subTest(kind=kind):
+                verge_fixture(self.tmp_path / 'profiles.yaml', kind=kind)
+                reply = SubscriptionReader().read('clash-verge', self.tmp_path)
+                self.assertFalse(reply['available'])
+                self.assertEqual(reply['name'], '')
+                self.assertEqual(reply['kind'], '')
+                self.assertIsNone(reply['updated_at'])
+                self.assertIsNone(reply['usage'])
+                if kind == 'local':
+                    self.assertEqual(reply['message'], '当前使用本地配置')
+
+    def test_subscription_name_is_bounded_and_control_characters_are_removed(self):
+        name = json.dumps('x' * 140 + '\x00\n\u200b', ensure_ascii=False)
+        verge_fixture(self.tmp_path / 'profiles.yaml', name=name, extra=False)
+        self.assertEqual(SubscriptionReader().read('clash-verge', self.tmp_path)['name'], 'x' * 128)
+
+    def test_missing_file_cache_notices_new_subscription(self):
+        reader = SubscriptionReader()
+        self.assertFalse(reader.read('clash-verge', self.tmp_path)['available'])
+        verge_fixture(self.tmp_path / 'profiles.yaml')
+        self.assertTrue(reader.read('clash-verge', self.tmp_path)['available'])
+
+    def test_missing_subscription_files_are_not_created_and_never_raise(self):
+        for kind in ('clash-verge', 'flclash'):
+            with self.subTest(kind=kind):
+                root = self.fresh_dir()
+                reply = SubscriptionReader().read(kind, root)
+                self.assertFalse(reply['available'])
+                self.assertEqual(list(root.iterdir()), [])
+                self.assert_private_free(reply)
 
 
 def make_flclash(root, *, kind='url', info=None):
@@ -695,80 +732,76 @@ def make_flclash(root, *, kind='url', info=None):
              'https://subscription.invalid/private-token', 'age-secret-fixture'))
 
 
-def test_flclash_queries_only_public_columns_with_read_only_connection(tmp_path, caplog):
-    make_flclash(tmp_path)
-    queries, modes = [], []
-    original = sqlite3.connect
-    def connect(database, **kwargs):
-        modes.append((database.endswith('?mode=ro'), kwargs.get('uri')))
-        connection = original(database, **kwargs)
-        connection.set_trace_callback(queries.append)
-        return connection
-    with patch('njust_wifi.subscription.sqlite3.connect', side_effect=connect):
-        reply = SubscriptionReader().read('flclash', tmp_path)
-    assert modes == [(True, True)]
-    assert len(queries) == 1
-    assert 'url' not in queries[0] and 'age_secret_key' not in queries[0]
-    assert reply['available'] and reply['name'] == 'Fl 订阅'
-    assert reply['updated_at'] == '2023-11-14T22:13:20+00:00'
-    assert reply['usage'] == {'used': 33, 'total': 0, 'expire': '2023-11-14T22:30:00+00:00'}
-    assert_private_free(reply, caplog)
+class FlClashSubscriptionTests(TempDirTestCase):
+    def test_flclash_queries_only_public_columns_with_read_only_connection(self):
+        make_flclash(self.tmp_path)
+        queries, modes = [], []
+        original = sqlite3.connect
+        def connect(database, **kwargs):
+            modes.append((database.endswith('?mode=ro'), kwargs.get('uri')))
+            connection = original(database, **kwargs)
+            connection.set_trace_callback(queries.append)
+            return connection
+        with patch('njust_wifi.subscription.sqlite3.connect', side_effect=connect):
+            reply = SubscriptionReader().read('flclash', self.tmp_path)
+        self.assertEqual(modes, [(True, True)])
+        self.assertEqual(len(queries), 1)
+        self.assertNotIn('url', queries[0])
+        self.assertNotIn('age_secret_key', queries[0])
+        self.assertTrue(reply['available'])
+        self.assertEqual(reply['name'], 'Fl 订阅')
+        self.assertEqual(reply['updated_at'], '2023-11-14T22:13:20+00:00')
+        self.assertEqual(reply['usage'], {'used': 33, 'total': 0, 'expire': '2023-11-14T22:30:00+00:00'})
+        self.assert_private_free(reply)
 
+    def test_bad_flclash_data_fails_closed(self):
+        for broken in ('prefs', 'id', 'database', 'table', 'info'):
+            with self.subTest(broken=broken):
+                root = self.fresh_dir()
+                make_flclash(root)
+                if broken == 'prefs':
+                    (root / 'shared_preferences.json').write_text('{bad')
+                elif broken == 'id':
+                    (root / 'shared_preferences.json').write_text(json.dumps({'flutter.config': '{"currentProfileId":true}'}))
+                elif broken == 'database':
+                    (root / 'database.sqlite').write_bytes(b'broken')
+                else:
+                    with closing(sqlite3.connect(root / 'database.sqlite')) as connection, connection:
+                        connection.execute('DROP TABLE profiles' if broken == 'table' else "UPDATE profiles SET subscription_info='bad'")
+                self.assertFalse(SubscriptionReader().read('flclash', root)['available'])
 
-@pytest.mark.parametrize('kind', ['clash-verge', 'flclash'])
-def test_missing_subscription_files_are_not_created_and_never_raise(tmp_path, caplog, kind):
-    reply = SubscriptionReader().read(kind, tmp_path)
-    assert not reply['available']
-    assert list(tmp_path.iterdir()) == []
-    assert_private_free(reply, caplog)
+    def test_flclash_cache_invalidates_for_preferences_database_and_wal(self):
+        make_flclash(self.tmp_path)
+        reader = SubscriptionReader()
+        self.assertTrue(reader.read('flclash', self.tmp_path)['available'])
+        for name in ('shared_preferences.json', 'database.sqlite', 'database.sqlite-wal'):
+            with self.subTest(name=name):
+                path = self.tmp_path / name
+                if not path.exists():
+                    path.touch()
+                os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1000000))
+                with patch('njust_wifi.subscription._flclash', return_value=('remote', 'Changed', None, None, 1000)) as load:
+                    self.assertEqual(reader.read('flclash', self.tmp_path)['name'], 'Changed')
+                    load.assert_called_once()
 
+    def test_flclash_profile_types_map_to_subscription_kinds(self):
+        # Real FlClash databases store 'url' for subscriptions and 'file' for imported files.
+        make_flclash(self.tmp_path, kind='url')
+        reply = SubscriptionReader().read('flclash', self.tmp_path)
+        self.assertTrue(reply['available'])
+        self.assertEqual(reply['kind'], 'remote')
+        with closing(sqlite3.connect(self.tmp_path / 'database.sqlite')) as connection, connection:
+            connection.execute("UPDATE profiles SET type = 'file'")
+        reply = SubscriptionReader().read('flclash', self.tmp_path)
+        self.assertFalse(reply['available'])
+        self.assertEqual(reply['message'], '当前使用本地配置')
 
-@pytest.mark.parametrize('broken', ['prefs', 'id', 'database', 'table', 'info'])
-def test_bad_flclash_data_fails_closed(tmp_path, broken):
-    make_flclash(tmp_path)
-    if broken == 'prefs':
-        (tmp_path / 'shared_preferences.json').write_text('{bad')
-    elif broken == 'id':
-        (tmp_path / 'shared_preferences.json').write_text(json.dumps({'flutter.config': '{"currentProfileId":true}'}))
-    elif broken == 'database':
-        (tmp_path / 'database.sqlite').write_bytes(b'broken')
-    else:
-        with closing(sqlite3.connect(tmp_path / 'database.sqlite')) as connection, connection:
-            connection.execute('DROP TABLE profiles' if broken == 'table' else "UPDATE profiles SET subscription_info='bad'")
-    assert not SubscriptionReader().read('flclash', tmp_path)['available']
-
-
-def test_flclash_cache_invalidates_for_preferences_database_and_wal(tmp_path):
-    make_flclash(tmp_path)
-    reader = SubscriptionReader()
-    assert reader.read('flclash', tmp_path)['available']
-    for name in ('shared_preferences.json', 'database.sqlite', 'database.sqlite-wal'):
-        path = tmp_path / name
-        if not path.exists():
-            path.touch()
-        os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 1000000))
-        with patch('njust_wifi.subscription._flclash', return_value=('remote', 'Changed', None, None, 1000)) as load:
-            assert reader.read('flclash', tmp_path)['name'] == 'Changed'
-            load.assert_called_once()
-
-
-def test_flclash_profile_types_map_to_subscription_kinds(tmp_path):
-    # Real FlClash databases store 'url' for subscriptions and 'file' for imported files.
-    make_flclash(tmp_path, kind='url')
-    reply = SubscriptionReader().read('flclash', tmp_path)
-    assert reply['available'] and reply['kind'] == 'remote'
-    with closing(sqlite3.connect(tmp_path / 'database.sqlite')) as connection, connection:
-        connection.execute("UPDATE profiles SET type = 'file'")
-    reply = SubscriptionReader().read('flclash', tmp_path)
-    assert not reply['available'] and reply['message'] == '当前使用本地配置'
-
-
-def test_flclash_long_term_unlimited_and_missing_usage(tmp_path):
-    make_flclash(tmp_path, info={'upload': 1, 'download': 2, 'total': 0, 'expire': 0})
-    assert SubscriptionReader().read('flclash', tmp_path)['usage'] == {'used': 3, 'total': 0, 'expire': ''}
-    with closing(sqlite3.connect(tmp_path / 'database.sqlite')) as connection, connection:
-        connection.execute('UPDATE profiles SET subscription_info = NULL')
-    assert SubscriptionReader().read('flclash', tmp_path)['usage'] is None
+    def test_flclash_long_term_unlimited_and_missing_usage(self):
+        make_flclash(self.tmp_path, info={'upload': 1, 'download': 2, 'total': 0, 'expire': 0})
+        self.assertEqual(SubscriptionReader().read('flclash', self.tmp_path)['usage'], {'used': 3, 'total': 0, 'expire': ''})
+        with closing(sqlite3.connect(self.tmp_path / 'database.sqlite')) as connection, connection:
+            connection.execute('UPDATE profiles SET subscription_info = NULL')
+        self.assertIsNone(SubscriptionReader().read('flclash', self.tmp_path)['usage'])
 
 
 class ControlsHttpTests(unittest.TestCase):
