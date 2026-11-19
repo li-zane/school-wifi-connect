@@ -9,6 +9,15 @@ $resultPath = Join-Path ([IO.Path]::GetFullPath($p.data_root)) 'update-result.js
 function Result([string]$State, [string]$Message, $Detail) {
     @{state=$State; version=$p.expected_version; message=$Message; detail=$Detail} | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8
 }
+
+function Set-InstalledDisplayVersion {
+    # Only the Inno installation matching this update gets a new Apps entry version.
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\NJUSTWiFi.CurrentUser_is1'
+    $location = (Get-ItemProperty -LiteralPath $key -Name InstallLocation -ErrorAction SilentlyContinue).InstallLocation
+    if ($location -and (Join-Path $location 'app-files\current') -eq $install) {
+        Set-ItemProperty -LiteralPath $key -Name DisplayVersion -Value $p.expected_version
+    }
+}
 $install = [IO.Path]::GetFullPath($p.install_root).TrimEnd('\')
 $stage = [IO.Path]::GetFullPath($p.stage).TrimEnd('\')
 $backup = [IO.Path]::GetFullPath($p.backup).TrimEnd('\')
@@ -123,6 +132,7 @@ try {
     $swapped = $true
     Start-App $p.expected_version
     Result 'updated' '更新完成'
+    try { Set-InstalledDisplayVersion } catch { } # Registry metadata is not part of the update transaction.
 } catch {
     $failed = $_.Exception.Message
     try {

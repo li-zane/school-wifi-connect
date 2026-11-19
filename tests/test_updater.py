@@ -199,6 +199,42 @@ class ReleaseFetchTests(unittest.TestCase):
 
 
 class UpdateInstallerTests(unittest.TestCase):
+    def test_scheduler_runs_the_windowed_runner_from_the_update_job(self):
+        with tempfile.TemporaryDirectory(prefix='wifi update ') as temp:
+            root = Path(temp)
+            scripts = root / 'bundled' / 'scripts'
+            scripts.mkdir(parents=True)
+            (scripts / 'apply-update.ps1').write_bytes(b'installer script')
+            (scripts / 'NJUSTWiFiUpdate.exe').write_bytes(b'windowed runner')
+            manager = UpdateManager(root / 'data')
+            manager.install_root = root / 'installed'
+            manager.stage = root / '.school-wifi-update-fixture'
+            manager.manifest = {'NJUSTWiFi.exe': 'hash'}
+            manager.job = manager.root / '0123456789abcdef'
+            manager.job.mkdir(parents=True)
+            manager.set(state='ready', latest_version='9.0.0')
+
+            with patch('njust_wifi.updater.sys._MEIPASS', str(scripts.parent), create=True), \
+                 patch('njust_wifi.updater.subprocess.CREATE_NO_WINDOW', 0x08000000, create=True), \
+                 patch('njust_wifi.updater.subprocess.run') as run:
+                manager.install(running=True)
+
+            runner = manager.job / 'NJUSTWiFiUpdate.exe'
+            launch = manager.job / 'launch.ps1'
+            task = 'NjustWifiUpdate0123456789ab'
+            self.assertEqual(manager.status()['state'], 'installing')
+            self.assertIn('New-ScheduledTaskAction -Execute $Runner\n', launch.read_text('utf-8'))
+            self.assertEqual(runner.read_bytes(), b'windowed runner')
+            self.assertEqual((manager.job / 'apply-update.ps1').read_bytes(), b'installer script')
+            plan = json.loads((manager.job / 'plan.json').read_text('utf-8'))
+            self.assertEqual(plan['task_name'], task)
+            self.assertTrue(plan['was_running'])
+            run.assert_called_once_with(
+                ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                 '-File', str(launch), '-Runner', str(runner), '-Task', task],
+                timeout=30, check=True, capture_output=True, creationflags=0x08000000,
+            )
+
     def test_installer_restore_never_rolls_back_a_finished_update(self):
         # The new backend can be mid-cycle right after boot, so /api/start may
         # answer 400. That restore must stay outside the rollback path.

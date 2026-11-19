@@ -252,9 +252,10 @@ class UpdateManager:
                 raise ValueError('请先下载更新')
             self.state.update(state='installing', message='正在安装，软件即将重启')
         try:
-            script = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent)) / 'scripts/apply-update.ps1'
-            helper = self.job / 'apply-update.ps1'
-            shutil.copy2(script, helper)
+            scripts = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent.parent)) / 'scripts'
+            runner = self.job / 'NJUSTWiFiUpdate.exe'
+            shutil.copy2(scripts / 'apply-update.ps1', self.job / 'apply-update.ps1')
+            shutil.copy2(scripts / runner.name, runner)
             task = 'NjustWifiUpdate' + self.job.name[:12]
             plan = dict(install_root=str(self.install_root), stage=str(self.stage),
                         backup=str(self.install_root.parent / ('.school-wifi-backup-' + self.job.name)),
@@ -263,9 +264,20 @@ class UpdateManager:
             plan_path = self.job / 'plan.json'
             plan_path.write_text(json.dumps(plan), 'utf-8')
             # Scheduler gives the helper its own lifetime beyond tray/monitor jobs.
+            # Run a windowed executable from the job directory so Windows never
+            # creates a console, and neither program locks the install directory.
             launch = self.job / 'launch.ps1'
-            launch.write_text("param([string]$Helper,[string]$Plan,[string]$Task)\n$ErrorActionPreference='Stop'\n$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"'+$Helper+'\" -Plan \"'+$Plan+'\"')\n$p=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited\n$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries\nRegister-ScheduledTask -TaskName $Task -Action $a -Principal $p -Settings $s -Force | Out-Null\nStart-ScheduledTask -TaskName $Task\n", 'utf-8')
-            subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(launch), '-Helper', str(helper), '-Plan', str(plan_path), '-Task', task], timeout=30, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            launch.write_text("""param([string]$Runner,[string]$Task)
+$ErrorActionPreference='Stop'
+$a=New-ScheduledTaskAction -Execute $Runner
+$p=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
+$s=New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName $Task -Action $a -Principal $p -Settings $s -Force | Out-Null
+Start-ScheduledTask -TaskName $Task
+""", 'utf-8')
+            subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                            '-File', str(launch), '-Runner', str(runner), '-Task', task],
+                           timeout=30, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
         except Exception:
             self.set(state='ready', message='更新安装启动失败，可再次尝试')
             raise ValueError('更新安装启动失败，请重试') from None

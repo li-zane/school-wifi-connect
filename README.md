@@ -2,24 +2,29 @@
 
 [下载最新版](https://github.com/li-zane/school-wifi-connect/releases/latest)
 
-解压 Windows-x64.zip 后运行 `NJUSTWiFi.exe`，无需安装 Python；使用系统的 Edge WebView2 Runtime。请把整个目录放在自己可写的位置。
+- **安装版**：运行 `NJUSTWiFi-<版本>-Windows-x64-Setup.exe`，默认仅为当前用户安装到 `%LOCALAPPDATA%\Programs\NJUSTWiFi`，无需管理员权限。安装后从 Windows 开始菜单搜索 **NJUST WiFi** 启动；在「设置 → 应用 → 已安装的应用」中卸载。
+- **便携版**：完整解压 `NJUSTWiFi-<版本>-Windows-x64.zip`，双击 `NJUSTWiFi.exe`。请把整个目录放在自己可写的位置，不要单独移动 EXE。
+
+两个版本都无需安装 Python，使用系统的 Edge WebView2 Runtime。由便携版切换到安装版前，请先从托盘选择「退出程序」，以免仍连接到旧版后台；无需重新填写已保存的设置。
 
 右上角“检查更新”支持检查正式发布、下载校验、安装并重启。新版本启动失败会自动恢复旧版。旧于 3.7.0 的版本需先手动下载一次。
 
-账号、密码、备用网络与日志仅保存在 `%LOCALAPPDATA%/NJUSTWiFi`，不上传 GitHub；分享时只分享发布 ZIP。
+账号、密码、备用网络与日志仅保存在 `%LOCALAPPDATA%/NJUSTWiFi`，不上传 GitHub；安装与卸载都保留这些数据。卸载前如曾开启「开机启动」并不再使用本软件，请先在软件中关闭该选项并确认系统提示，以移除独立的登录前联网任务。分享时只分享发布链接、安装包或便携 ZIP。
 
 ## 在线发布
 
 版本规则见 [AGENTS.md](AGENTS.md)：未经用户明确要求，不升级主版本号或次版本号；常规修复、小功能调整如需发布，仅递增补丁号。规则、说明和问题调查不自动触发版本升级。
 
-修改 `njust_wifi/__init__.py` 版本并推送对应 `vX.Y.Z` 标签，GitHub Actions 会执行测试、构建并发布 Windows ZIP、源码 ZIP 和 `SHA256.json`。公共 API 限流时自动改用公开 Release 校验清单，无需 GitHub Token。更新只在用户点击时检查，安装在可写目录中进行，并保留原版本备份。源码运行支持检查版本，应用内安装需使用桌面发布版。
+推送 `main` 或提交 PR 时，Windows CI 会运行单元测试、构建安装包与 ZIP、校验 SHA256，并验证安装、开始菜单快捷方式和卸载。发布时修改 `njust_wifi/__init__.py` 版本并推送对应的 `vX.Y.Z` 标签；Release 工作流复用同一套 CI，标签和程序版本一致且检查通过后，才发布 Windows 安装包、便携 ZIP、源码 ZIP 和 `SHA256.json`。重新运行工作流不会覆盖已发布的文件。
+
+公共 API 限流时自动改用公开 Release 校验清单，无需 GitHub Token。更新只在用户点击时检查，两种桌面版都使用同一便携 ZIP 作为更新载荷，并保留原版本备份。安装版的开始菜单与卸载程序位于更新替换目录之外，更新后保持可用。源码运行支持检查版本，应用内安装需使用桌面发布版。
 
 
 轻量 Windows 校园网自动登录工具。Python 标准库后端、原生 HTML/CSS/JavaScript 界面和 Windows 原生托盘/窗口。使用系统 WebView2，不附带 Chromium、Node.js 或数据库。
 
 ## 使用
 
-Windows 10/11 x64 发布包完整解压后双击 `NJUSTWiFi.exe`，打开独立桌面窗口。需要系统已有 Microsoft Edge WebView2 Runtime 与 .NET Framework 4.6.2 或更新版（当前 Windows 通常已包含）。后端固定监听 `http://127.0.0.1:18089`，也可从浏览器访问。
+Windows 10/11 x64 可以从开始菜单打开已安装的「NJUST WiFi」，或双击便携版里的 `NJUSTWiFi.exe`。需要系统已有 Microsoft Edge WebView2 Runtime 与 .NET Framework 4.6.2 或更新版（当前 Windows 通常已包含）。后端固定监听 `http://127.0.0.1:18089`，也可从浏览器访问。
 
 最小化仅收起窗口，任务栏图标保留。关闭窗口时可选择“退出程序”或“关闭到托盘”，并可记住选择；高级设置可改为每次询问、托盘或退出。关闭到托盘会释放网页窗口进程，保留轻量托盘与后台；双击托盘或再次打开 EXE 可重开窗口。托盘“退出界面”退出托盘和窗口，保留网络监控；“退出程序”同时停止后台。后端通过当前用户的 Windows 任务计划程序独立运行，不依赖桌面窗口。“开机启动”控制登录前联网任务及登录后的用户后台（首次设置需管理员确认），“启动后自动监控”控制是否自动检测。关闭开机启动会移除登录前任务及登录触发，不中断当前用户后台。
 
@@ -117,9 +122,16 @@ python -m venv .venv
 .venv\Scripts\python.exe scripts/build-release.py --exe
 ```
 
+要同时构建 Windows 安装包和便携 ZIP，先在本地构建目录中准备固定版本的 Inno Setup，再使用 `--installer`：
+
+```powershell
+.\scripts\install-build-tools.ps1
+.venv\Scripts\python.exe scripts/build-release.py --installer
+```
+
 采用目录式 EXE，避免每次启动将整个 Python 解压到临时目录。运行时无需安装 Python。构建剔除测试框架、Tk、未使用的 bz2/lzma/zstd 压缩库，并移除 Python 文档字符串；保留 HTTPS 和自定义探测能力。原生托盘不加载 WebView2 程序集，窗口关闭后所有网页进程释放。前端无持续动画，隐藏页面停止轮询，后台按检测间隔休眠。
 
-发布仅分享 `dist/NJUSTWiFi-3.9.8-Windows-x64.zip` 或源码 ZIP，禁止直接压缩整个开发目录。桌面包中的 `NJUSTWiFi.exe` 是入口，`NJUSTWiFiWindow.exe` 和 `NJUSTWiFiBackend.exe` 、`NJUSTWiFiProxyBridge.exe` 以及 DLL、`_internal` 均需保留。WebView2 SDK 固定版本和 SHA256 校验，发布包保留其许可证。
+发布仅分享 `dist/` 中生成的安装包、便携 ZIP 或源码 ZIP，禁止直接压缩整个开发目录。桌面包中的 `NJUSTWiFi.exe` 是入口，`NJUSTWiFiWindow.exe` 和 `NJUSTWiFiBackend.exe`、`NJUSTWiFiProxyBridge.exe` 以及 DLL、`_internal` 均需保留。WebView2 SDK 固定版本和 SHA256 校验，发布包保留其许可证。
 
 3.9.4 扩大右下角拉伸热区：原生窗口按 DPI 缩放至 28 像素，网页右下角增加 24 CSS 像素透明命中区并调用原生窗口拉伸。最大化时隐藏网页热区且禁用拉伸；不扩大其他边缘、不增加可见边框或常驻任务。
 
