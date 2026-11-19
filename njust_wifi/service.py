@@ -5,6 +5,7 @@ from collections import deque
 from datetime import datetime, timezone, timedelta
 import json
 import os
+import secrets
 from pathlib import Path
 import subprocess
 import sys
@@ -99,6 +100,7 @@ class Service:
         self.proxy = ProxyProtection(store.root, demo=demo)
         self.proxy_wake = threading.Event()
         self.proxy_check_requested = threading.Event()
+        self.proxy_check = {'id': None, 'state': 'idle', 'client': self.proxy.client, 'result': None}
         if (store.root / "events.jsonl").exists():
             legacy_normal = None
             with (store.root / "events.jsonl").open("rb") as stream:
@@ -228,21 +230,36 @@ class Service:
                   '/api/probes/clear':'清空守护软件', '/api/probes/elevate':'设置管理员守护',
                   '/api/proxy/client':'切换代理客户端', '/api/proxy/controller':'保存外部控制设置',
                   '/api/proxy/check':'手动检测代理出口', '/api/proxy/restore':'恢复代理和 TUN',
-                  '/api/proxy/group':'设置守护代理组', '/api/proxy/policy':'设置软件网络方式',
-                  '/api/proxy/groups':'连接代理客户端', '/api/logs/clear':'清空日志',
+                  '/api/proxy/group':'设置分流代理组', '/api/proxy/policy':'设置软件网络方式',
+                  '/api/proxy/groups':'连接代理客户端', '/api/proxy/options':'设置代理保护选项',
+                  '/api/proxy/node':'切换代理节点',
+                  '/api/proxy/switch':'切换代理开关', '/api/proxy/fallback':'设置故障处置顺序',
+                  '/api/logs/clear':'清空日志',
                   '/api/logs/open':'打开日志目录', '/api/update/check':'检查更新',
                   '/api/update/download':'下载更新', '/api/update/install':'安装更新'}
         label = labels.get(path)
         if label is None:
             return None
+        if path == '/api/proxy/node':
+            label += ' · ' + ('FlClash' if self.proxy.client == 'flclash' else 'Clash Verge')
+        if path == '/api/proxy/switch':
+            label = {'proxy': '切换系统代理', 'tun': '切换 TUN'}.get(raw.get('field')) if isinstance(raw.get('field'), str) else None
+            label = label or '切换代理开关'
+            if type(raw.get('enabled')) is bool:
+                label += ' · ' + ('开启' if raw['enabled'] else '关闭')
         private = False
         if path == '/api/config':
             fields = {'username':'认证账号', 'password':'认证密码', 'fallback_networks':'备用 WiFi',
-                      'proxy_fail_open':'代理故障保护', 'startup_enabled':'开机联网',
+                      'proxy_fail_open':'出口异常时自动处置', 'startup_enabled':'开机联网',
                       'auto_start_monitor':'自动值守', 'close_behavior':'关闭行为'}
             changed = [name for key,name in fields.items() if key in raw]
             if changed:
                 label += '（' + '、'.join(changed) + '）'
+        if path == '/api/proxy/options':
+            names = {'auto_restore':'出口恢复后自动恢复', 'clear_stale':'清理残留系统代理'}
+            chosen = [name + ('开启' if raw[key] is True else '关闭') for key, name in names.items() if key in raw]
+            if chosen:
+                label += '（' + '、'.join(chosen) + '）'
         with self.lock:
             paths = self.guards.paths
             if path == '/api/proxy/policy':
@@ -279,10 +296,11 @@ class Service:
     def observe_proxy(self, *, requested=False):
         status = self.proxy.status()
         state, message = status['state'], status['message']
-        self.health('proxy', '代理出口正常', state == 'healthy')
-        if state != 'healthy' or requested:
+        exit_state = status.get('exit_state') or state
+        self.health('proxy', '代理出口正常', exit_state == 'healthy')
+        if exit_state != 'healthy' or state == 'error' or requested:
             if requested:
-                self.guard_event('error' if state in ('error','failed') else 'info', '代理出口检测结果：' + message)
+                self.guard_event('error' if state == 'error' or exit_state == 'failed' else 'info', '代理出口检测结果：' + message)
             else:
                 self.maintenance('proxy', 'error' if state in ('error','failed') else state, message)
         else:
@@ -448,13 +466,45 @@ class Service:
     def proxy_action(self, action, raw):
         if action == 'client':
             self.proxy.set_client(raw.get('client'))
+            with self.lock:
+                if self.proxy_check['client'] != self.proxy.client and self.proxy_check['state'] in ('queued', 'running'):
+                    self.proxy_check.update(state='cancelled', result=None)
         elif action == 'controller':
             self.proxy.configure_controller(raw)
         elif action == 'check':
-            self.proxy_check_requested.set()
-            self.proxy_wake.set()
+            with self.lock:
+                if self.proxy_check['state'] not in ('queued', 'running'):
+                    self.proxy_check = {'id': secrets.token_hex(12), 'state': 'queued',
+                                        'client': self.proxy.client, 'result': None}
+                    self.proxy_check_requested.set()
+                    self.proxy_wake.set()
+                return {'check_id': self.proxy_check['id']}
+        elif action == 'node':
+            try:
+                self.proxy.select_node(raw)
+            finally:
+                if self.proxy.exit_state == 'uncertain':
+                    self.health('proxy', '', False)
         elif action == 'restore':
             self.proxy.restore()
+        elif action == 'options':
+            self.proxy.set_options(raw)
+        elif action == 'fallback':
+            result = self.proxy.set_fallback(raw)
+            self.proxy_wake.set()
+            return result
+        elif action == 'switch':
+            if (not isinstance(raw, dict) or set(raw) != {'client', 'field', 'enabled'}
+                    or not isinstance(raw['client'], str)):
+                raise ValueError('代理开关设置格式不正确')
+            # Keep identity validation, the write and the warning in one routing
+            # transaction. Never hold the service lock across a bridge call.
+            with self.proxy.lock:
+                result = self.proxy.set_switch(raw['field'], raw['enabled'], client=raw['client'])
+                if raw['enabled'] and self.proxy.exit_state == 'failed' and self.store.settings['proxy_fail_open']:
+                    result['warning'] = '出口仍异常，故障保护复核后会再次关闭'
+            self.proxy_wake.set()
+            return result
         elif action in ('policy', 'group'):
             with self.lock:
                 paths = list(self.guards.paths)
@@ -466,11 +516,26 @@ class Service:
             raise ValueError("代理操作不存在")
         self.proxy_wake.set()
 
+    def proxy_check_status(self):
+        with self.lock:
+            return self.proxy_check.copy()
+
     def _proxy_work(self):
         while not self.closed.is_set():
-            enabled = self.store.settings["proxy_fail_open"] and not self.demo
-            requested = self.proxy_check_requested.is_set()
-            self.proxy_check_requested.clear()
+            protect = self.store.settings["proxy_fail_open"] and not self.demo
+            # Keep observing a closed proxy even when automatic restoration is off.
+            pending = self.proxy.recovery_path.exists() and not self.demo
+            stale = (self.proxy.clear_stale or self.proxy.stale_path.exists()) and not self.demo
+            enabled = protect or pending
+            with self.lock:
+                requested = self.proxy_check_requested.is_set()
+                self.proxy_check_requested.clear()
+                check_id = self.proxy_check['id'] if requested else None
+                check_client = self.proxy_check['client']
+                if check_id:
+                    self.proxy_check['state'] = 'running'
+            # A queued manual check belongs to the client selected at submission.
+            requested = requested and check_client == self.proxy.client
             synchronize = bool(self.proxy.policies or self.proxy.managed_rules) and not self.demo
             if synchronize:
                 try:
@@ -485,13 +550,35 @@ class Service:
                     with self.proxy.lock:
                         self.proxy.state='error'; self.proxy.message='客户端分流待同步，请连接本地接口'
                     self.maintenance('rules-error', 'error', '软件分流规则同步未完成，请连接客户端外部控制接口')
-            if enabled or requested:
-                self.proxy.tick(self.closed, self.guard_event,
-                    lambda: requested or self.store.settings["proxy_fail_open"],
-                    required_failures=1 if requested else 3,
-                    switch_allowed=lambda: self.store.settings["proxy_fail_open"])
-                self.observe_proxy(requested=requested)
-            self.proxy_wake.wait(15 if enabled or synchronize else None)
+            try:
+                handled = False
+                if stale:
+                    # Needs no running client: only the registry and one loopback connect.
+                    handled = self.proxy.stale_tick(self.closed, self.guard_event, lambda: self.proxy.clear_stale)
+                    if handled:
+                        self.observe_proxy(requested=requested)
+                if (enabled or requested) and not handled:
+                    self.proxy.tick(self.closed, self.guard_event,
+                        lambda: requested or self.store.settings["proxy_fail_open"]
+                                or self.proxy.recovery_path.exists(),
+                        required_failures=1 if requested else 3,
+                        switch_allowed=lambda: self.store.settings["proxy_fail_open"],
+                        auto_restore=lambda: self.proxy.auto_restore, manual=requested,
+                        **({'expected_client': check_client} if check_id else {}))
+                    self.observe_proxy(requested=requested)
+            except Exception:
+                self.guard_event('error', '代理出口检测未完成，请重试')
+                if check_id:
+                    with self.proxy.lock:
+                        self.proxy.exit_state = 'uncertain'; self.proxy.message = '代理出口检测未完成，请重试'
+            finally:
+                if check_id:
+                    result = self.proxy.status()
+                    with self.lock:
+                        if self.proxy_check['id'] == check_id and self.proxy_check['state'] == 'running':
+                            cancelled = result['client'] != check_client
+                            self.proxy_check.update(state='cancelled' if cancelled else 'done', result=None if cancelled else result)
+            self.proxy_wake.wait(15 if enabled or synchronize or stale else None)
             self.proxy_wake.clear()
 
     def candidates(self):
@@ -552,7 +639,8 @@ class Service:
                         # Both HTTPS exit probes still have to fail, and tick
                         # reconfirms the physical direct path before switching.
                         self.proxy.tick(self.cancel, self.guard_event,
-                            lambda: self.store.settings['proxy_fail_open'], required_failures=1)
+                            lambda: self.store.settings['proxy_fail_open'], required_failures=1,
+                            auto_restore=lambda: self.proxy.auto_restore)
                         self.observe_proxy()
                 with self.lock:
                     if self.cancel.is_set():

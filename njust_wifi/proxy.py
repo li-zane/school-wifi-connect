@@ -2,24 +2,58 @@
 from __future__ import annotations
 
 import ctypes
+from copy import deepcopy
 from ctypes import wintypes
 import http.client
 import io
 import json
 import os
 from pathlib import Path
+from datetime import datetime, timezone, timedelta
 import re
+import socket
 import threading
 import time
 import urllib.parse
 
 from .storage import atomic_write
 from .client_control import ClientSwitches, ClientControlError
+from .subscription import SubscriptionReader
 
 BEGIN = '// BEGIN SCHOOL-WIFI-CONNECT'
 END = '// END SCHOOL-WIFI-CONNECT'
 MAX_REPLY = 4 * 1024 * 1024
 CLIENTS = {'clash-verge':'Clash Verge', 'flclash':'FlClash'}
+RECOVERY_ROUNDS = 4       # healthy rounds before an automatic restore
+MAX_FLAPS = 3             # failures soon after a restore before automation stops
+FLAP_WINDOW = 1800        # seconds a restored exit has to stay healthy
+MAX_AUTO_ATTEMPTS = 3     # unfinished automatic restores before waiting for the user
+STALE_ROUNDS = 3          # refused rounds before a leftover system proxy is closed
+STALE_RECOVERY_ROUNDS = 2
+FALLBACK_STEPS = ('switch_node', 'close_tun', 'close_proxy')
+NODE_SWITCH_WINDOW = 1800
+NODE_SWITCH_LIMIT = 3
+NODE_RETRY_INTERVAL = 300
+
+
+def fallback_settings(raw=None):
+    if (not isinstance(raw, dict) or set(raw) != {'order', 'enabled'}
+            or not isinstance(raw['order'], list) or len(raw['order']) != 3
+            or any(not isinstance(step, str) for step in raw['order'])
+            or set(raw['order']) != set(FALLBACK_STEPS)
+            or not isinstance(raw['enabled'], dict) or set(raw['enabled']) != set(FALLBACK_STEPS)
+            or any(type(value) is not bool for value in raw['enabled'].values())):
+        raise ValueError('故障处置设置格式不正确')
+    return deepcopy(raw)
+
+
+def default_fallback():
+    return {'order': list(FALLBACK_STEPS),
+            'enabled': {'switch_node': False, 'close_tun': True, 'close_proxy': True}}
+
+
+def timestamp():
+    return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
 class ControllerError(OSError):
@@ -286,14 +320,50 @@ class ProxyProtection:
         self.policies = {}
         self.group = ''
         self.state = 'idle'
-        self.message = '未启用代理保护'
+        self.message = '故障保护未开启，可手动检测出口'
         self.failures = 0
         self.egress = ''
+        self.exit_chain = []
+        self.exit_delay = 48 if demo else None
+        self.fallback = default_fallback()
+        self.last_fallback = None
+        self.node_switches = []
+        self.node_retry_at = None
+        self._recovery_switched = False
+        # A chain run that changed nothing is not repeated on every tick: hold it
+        # for NODE_RETRY_INTERVAL and keep showing its result instead.
+        self.fallback_hold_until = None
+        self._fallback_result = None
+        self._fallback_notice = None
+        self._subscriptions = SubscriptionReader()
+        self._demo_switches = {'proxy': True, 'tun': False}
+        self._demo_at = datetime.now(timezone.utc)
         self.probe_reason = ''
+        self.exit_state = ''
+        self.checked_at = ''
+        self.connected = None
+        # Both are opt-in. They live here rather than in settings.json: that file
+        # rejects unknown keys and is also read by an older, separately installed boot copy.
+        self.auto_restore = False
+        self.clear_stale = False
+        self.recoveries = 0
+        self.flaps = 0
+        self.restored_at = None
+        self.auto_attempts = 0
+        self.recovery_exit = ''
+        self.stale_failures = 0
+        self.stale_clears = []
         self.path = root / 'routing-settings.json'
         if self.path.exists():
             try:
                 raw = json.loads(self.path.read_text('utf-8'))
+                options = raw.get('options') if isinstance(raw.get('options'), dict) else {}
+                self.auto_restore = options.get('auto_restore') is True
+                self.clear_stale = options.get('clear_stale') is True
+                try:
+                    self.fallback = fallback_settings(options.get('fallback'))
+                except ValueError:
+                    pass
                 self.client = raw.get('client') if raw.get('client') in CLIENTS else self.client
                 self.profiles = {key:value for key,value in raw.get('profiles',{}).items() if key in CLIENTS and isinstance(value,dict)}
                 raw = self.profiles.get(self.client, raw)
@@ -312,9 +382,57 @@ class ProxyProtection:
     def recovery_path(self):
         return self.root / ('proxy-recovery-flclash.json' if self.client=='flclash' else 'proxy-recovery.json')
 
+    @property
+    def stale_path(self):
+        return self.root / ('proxy-stale-flclash.json' if self.client=='flclash' else 'proxy-stale.json')
+
     def save(self):
         self.profiles[self.client] = {'group':self.group, 'policies':self.policies.copy(), 'managed_rules':self.managed_rules}
-        atomic_write(self.path, json.dumps({'client':self.client, 'profiles':self.profiles, 'group':self.group, 'policies':self.policies, 'managed_rules':self.managed_rules}, ensure_ascii=False).encode())
+        atomic_write(self.path, json.dumps({'client':self.client, 'profiles':self.profiles, 'group':self.group, 'policies':self.policies, 'managed_rules':self.managed_rules,
+                                            'options':{'auto_restore':self.auto_restore, 'clear_stale':self.clear_stale,
+                                                       'fallback':self.fallback}}, ensure_ascii=False).encode())
+
+    def set_fallback(self, raw):
+        value = fallback_settings(raw)
+        with self.lock:
+            previous = self.fallback
+            self.fallback = value
+            try:
+                self.save()
+            except Exception:
+                self.fallback = previous
+                raise ValueError('故障处置设置保存未完成，请重试') from None
+            self.node_switches = []
+            self.node_retry_at = None
+            self._release_fallback_hold()
+            return {'fallback': deepcopy(self.fallback)}
+
+    @property
+    def node_switch_paused(self):
+        now = time.monotonic()
+        self.node_switches = [moment for moment in self.node_switches if now - moment < NODE_SWITCH_WINDOW]
+        return len(self.node_switches) >= NODE_SWITCH_LIMIT
+
+    def set_options(self, raw):
+        if (not isinstance(raw, dict) or not raw or set(raw) - {'auto_restore', 'clear_stale'}
+                or any(type(value) is not bool for value in raw.values())):
+            raise ValueError('代理保护选项格式不正确')
+        with self.lock:
+            if 'auto_restore' in raw:
+                self.auto_restore = raw['auto_restore']
+                self._reset_automation()
+            if 'clear_stale' in raw:
+                self.clear_stale = raw['clear_stale']
+                self.stale_failures = 0; self.stale_clears = []
+            self.save()
+
+    def _release_fallback_hold(self):
+        self.fallback_hold_until = None; self._fallback_result = None; self._fallback_notice = None
+
+    def _reset_automation(self):
+        self.recoveries = 0; self.flaps = 0; self.auto_attempts = 0; self.restored_at = None
+        self.recovery_exit = ''
+        self._recovery_switched = False
 
     def set_client(self, client):
         if not isinstance(client,str) or client not in CLIENTS:
@@ -329,12 +447,38 @@ class ProxyProtection:
             self.controller = Controller(kind=client, options=self.controllers.get(client))
             self.switches = ClientSwitches(self.root, client)
             self.failures = 0; self.egress = ''; self.state = 'idle'; self.message = '请选择连接客户端'
+            self.exit_state = ''
+            self.exit_chain = []; self.exit_delay = 48 if self.demo else None
+            self.node_switches = []; self.last_fallback = None
+            self.node_retry_at = None; self._release_fallback_hold()
+            self.connected = None; self.stale_failures = 0; self._reset_automation()
             self.save()
 
     def status(self):
         with self.lock:
+            closed, closed_at, cause = [], '', ''
+            for path, kind in ((self.recovery_path, 'exit'), (self.stale_path, 'stale')):
+                try:
+                    saved = json.loads(path.read_text('utf-8'))
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(saved, dict):
+                    continue
+                fields = saved.get('completed') if kind == 'exit' else ['proxy']
+                closed = [name for name in ('tun', 'proxy') if isinstance(fields, list) and name in fields]
+                closed_at = saved['at'] if isinstance(saved.get('at'), str) else ''
+                cause = kind
+                break
+            paused = self.flaps >= MAX_FLAPS or self.auto_attempts >= MAX_AUTO_ATTEMPTS
             return {'state':self.state, 'message':self.message, 'group':self.group, 'client':self.client,
-                    'restore_available':self.recovery_path.exists(), 'egress':self.egress, 'controller':self.controller_status()}
+                    'exit_state':self.exit_state,
+                    'exit_delay':self.exit_delay, 'fallback':deepcopy(self.fallback),
+                    'last_fallback':deepcopy(self.last_fallback), 'node_switch_paused':self.node_switch_paused,
+                    'restore_available':self.recovery_path.exists(), 'egress':self.egress, 'controller':self.controller_status(),
+                    'checked_at':self.checked_at, 'connected':self.connected, 'closed':closed, 'closed_at':closed_at, 'cause':cause,
+                    'auto_restore':self.auto_restore, 'clear_stale':self.clear_stale, 'auto_restore_paused':paused,
+                    'recovering':{'count':self.recoveries, 'needed':RECOVERY_ROUNDS * 2 ** min(self.flaps, MAX_FLAPS)}
+                                 if cause == 'exit' and self.auto_restore and not paused else None}
 
     def controller_status(self):
         option = self.controllers.get(self.client,{})
@@ -404,17 +548,100 @@ class ProxyProtection:
             self.controllers = controllers
             self.controller = Controller(kind=self.client, options=option)
             self.failures=0; self.egress=''; self.state='idle'; self.message='控制器设置已更新，请连接客户端'
+            self.exit_state = ''; self.recoveries = 0; self.recovery_exit = ''
+            self.exit_chain = []; self.exit_delay = 48 if self.demo else None
+            self.connected = None
+
+    def connect(self):
+        """Quiet probe for the settings page: it never raises and is not audited."""
+        try:
+            return {'connected': True, 'groups': self.groups()}
+        except ValueError as error:
+            return {'connected': False, 'groups': [], 'message': str(error)}
 
     def groups(self):
         if self.demo:
+            self.connected = True
             return ['示例代理']
         try:
             rows = self.controller.request('GET', '/proxies').get('proxies', {})
+            self.connected = True
             return sorted(name for name, row in rows.items() if row.get('type') in ('Selector','URLTest','Fallback','LoadBalance') and name not in ('GLOBAL',) and not any(c in name for c in ',\r\n'))
         except Exception:
+            self.connected = False
             if self.client=='flclash':
                 raise ValueError('请启动 FlClash，并在“外部控制”中开启本地接口后连接') from None
             raise ValueError('未连接 Clash Verge / Mihomo，请先启动代理客户端') from None
+
+    def node_choices(self):
+        """Expose names and existing delays only, never subscription credentials."""
+        with self.lock:
+            if self.demo:
+                rows = {'示例代理': {'type': 'Selector', 'all': ['香港 01', '日本 01', '自动优选'], 'now': getattr(self, '_demo_node', '香港 01')},
+                        '自动优选': {'type': 'URLTest', 'all': ['香港 01', '日本 01'], 'now': '香港 01'},
+                        '香港 01': {'type': 'VLESS', 'history': [{'delay': 48}]},
+                        '日本 01': {'type': 'Shadowsocks', 'history': [{'delay': 76}]}}
+            else:
+                try:
+                    rows = self.controller.request('GET', '/proxies')['proxies']
+                    if not isinstance(rows, dict):
+                        raise ValueError()
+                except Exception:
+                    self.connected = False
+                    raise ValueError('请连接客户端的外部控制器后重试') from None
+            groups, nodes = [], {}
+            for name, row in rows.items():
+                if not isinstance(name, str) or not isinstance(row, dict):
+                    continue
+                kind = row.get('type', '')
+                history = row.get('history')
+                last = history[-1] if isinstance(history, list) and history and isinstance(history[-1], dict) else {}
+                delay = last.get('delay')
+                nodes[name] = {'type': kind if isinstance(kind, str) else '',
+                               'delay': delay if type(delay) in (int, float) and 0 < delay < 60000 else None}
+                choices = row.get('all')
+                if isinstance(choices, list):
+                    choices = list(dict.fromkeys(c for c in choices if isinstance(c, str)))
+                    groups.append({'name': name, 'type': nodes[name]['type'],
+                                   'selected': row.get('now') if isinstance(row.get('now'), str) else '',
+                                   'selectable': kind == 'Selector', 'all': choices})
+            self.connected = True
+            return {'client': self.client, 'groups': groups, 'nodes': nodes}
+
+    def select_node(self, raw):
+        if (not isinstance(raw, dict) or set(raw) != {'client', 'group', 'node'}
+                or any(not isinstance(raw[k], str) or not raw[k] or len(raw[k]) > 1024 for k in raw)):
+            raise ValueError('请选择有效的代理组和节点')
+        with self.lock:
+            if raw['client'] != self.client:
+                raise ValueError('客户端已切换，请刷新节点列表')
+            choices = self.node_choices()
+            group = next((g for g in choices['groups'] if g['name'] == raw['group']), None)
+            if not group or not group['selectable']:
+                raise ValueError('此代理组由客户端自动选择，请选择手动代理组')
+            if raw['node'] not in group['all']:
+                raise ValueError('节点列表已变化，请刷新后选择')
+            self.node_switches = []; self.node_retry_at = None; self._recovery_switched = False
+            self._release_fallback_hold()
+            if group['selected'] == raw['node']:
+                return
+            # Invalidate the previous exit even if a write succeeds but its
+            # readback is interrupted. Keep the recovery record and switches.
+            self.exit_state = 'uncertain'
+            self.recoveries = 0; self.recovery_exit = ''; self.failures = 0; self.egress = ''
+            self.exit_chain = []; self.exit_delay = 48 if self.demo else None
+            self.message = '节点已变化，等待检测'
+            if self.demo:
+                self._demo_node = raw['node']
+                return
+            try:
+                path = '/proxies/' + urllib.parse.quote(raw['group'], safe='')
+                self.controller.request('PUT', path, {'name': raw['node']})
+                current = self.controller.request('GET', '/proxies')['proxies'].get(raw['group'], {})
+            except Exception:
+                raise ValueError('节点切换未确认，请刷新当前选择') from None
+            if current.get('now') != raw['node']:
+                raise ValueError('客户端未确认该节点，请刷新后重试')
 
     def rules(self, paths, policies=None, group=None):
         from .probes import ApplicationGuards
@@ -515,10 +742,12 @@ class ProxyProtection:
         through a different selector. URLTest on a group can pick a healthy
         alternative; test its *currently selected leaf* instead.
         """
+        self.exit_chain = []
         config = self.controller.request('GET', '/configs')
         rows = self.controller.request('GET', '/proxies').get('proxies', {})
         mode = str(config.get('mode', '')).lower()
         if mode == 'direct':
+            self.exit_chain = ['DIRECT']
             self.egress = 'DIRECT'; self.probe_reason = '当前客户端处于直连模式'
             return None
         if mode == 'global':
@@ -538,7 +767,7 @@ class ProxyProtection:
         else:
             self.egress = ''; self.probe_reason = '未识别代理路由模式，保留当前设置'
             return None
-        chain = []
+        chain = self.exit_chain
         for _ in range(16):
             if not isinstance(target, str) or target in chain or target not in rows:
                 self.egress = ' → '.join(chain); self.probe_reason = '代理选择链尚未就绪，保留当前设置'
@@ -558,11 +787,14 @@ class ProxyProtection:
         return None
 
     def proxy_healthy(self):
+        self.exit_delay = None
         try:
             leaf = self.active_exit()
         except Exception:
+            self.connected = False
             self.probe_reason = '代理控制器未连接，出口状态待确认'
             return None
+        self.connected = True
         if leaf is None:
             return None
         failures = 0
@@ -570,7 +802,9 @@ class ProxyProtection:
             try:
                 query = urllib.parse.urlencode({'url':url, 'timeout':3500, 'expected':'204'})
                 reply = self.controller.request('GET', '/proxies/' + urllib.parse.quote(leaf, safe='') + '/delay?' + query)
-                if isinstance(reply.get('delay'), (int, float)) and reply['delay'] > 0:
+                delay = reply.get('delay')
+                if type(delay) in (int, float) and 0 < delay <= 3500:
+                    self.exit_delay = delay
                     return True
                 self.probe_reason = '出口检测返回未识别结果，保留当前设置'
             except ControllerError as error:
@@ -581,6 +815,108 @@ class ProxyProtection:
             except Exception:
                 self.probe_reason = '代理控制器未响应，出口状态待确认'
         return False if failures == 2 else None
+
+    def _probe_exit(self):
+        """Keep node reachability separate from the switches' recovery state."""
+        healthy = self.proxy_healthy()
+        self.exit_state = 'healthy' if healthy is True else 'failed' if healthy is False else 'uncertain'
+        return healthy
+
+    def _switch_node(self, cancel):
+        """Try two measured alternatives in the deepest manual selector.
+
+        A round counts once as soon as a selection write is attempted, even if
+        its reply is lost. Rollback is always attempted after an unfinished round.
+        """
+        def result(state, detail):
+            return {'result': state, 'detail': detail}
+        if self.demo:
+            return result('skipped', '演示模式不自动切换节点')
+        if cancel.is_set():
+            return result('skipped', '操作已取消，保留当前设置')
+        if self.node_switch_paused:
+            return result('skipped', '节点切换过于频繁，已暂停')
+        self.node_retry_at = time.monotonic()
+        try:
+            if self.active_exit() is None:
+                return result('skipped', '当前出口由客户端自动选择')
+            rows = self.controller.request('GET', '/proxies')['proxies']
+            group = next((name for name in reversed(self.exit_chain)
+                          if rows.get(name, {}).get('type') == 'Selector'), None)
+            if group is None:
+                return result('skipped', '当前出口由客户端自动选择')
+            original = rows[group]['now']
+            excluded = {'DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMPATIBLE'}
+            blocked = {'direct', 'reject', 'rejectdrop', 'reject-drop', 'pass', 'compatible'}
+            candidates = list(dict.fromkeys(name for name in rows[group].get('all', [])
+                if isinstance(name, str) and name != original and name.upper() not in excluded
+                and isinstance(rows.get(name), dict) and rows[name].get('type', '').lower() not in blocked))
+            if not candidates:
+                return result('skipped', '同组没有其他节点')
+            query = urllib.parse.urlencode({'url': 'https://www.gstatic.com/generate_204', 'timeout': 3500, 'expected': '204'})
+            def valid(value):
+                return type(value) in (int, float) and 0 < value <= 3500
+            delays = {}
+            try:
+                reply = self.controller.request('GET', '/group/' + urllib.parse.quote(group, safe='') + '/delay?' + query)
+                if not isinstance(reply, dict) or not any(name in reply for name in candidates):
+                    raise ValueError()
+                delays = {name: reply[name] for name in candidates if valid(reply.get(name))}
+            except Exception as exc:
+                if isinstance(exc, ControllerError) and exc.status not in (400, 404, 405, 501):
+                    return result('failed', '节点测速接口未就绪，请连接客户端外部控制接口')
+                if not isinstance(exc, (ControllerError, ValueError, TypeError, KeyError)):
+                    return result('failed', '节点测速未确认，请连接客户端外部控制接口')
+                # Older cores do not implement the group endpoint. Bound work on
+                # their per-node endpoint; never turn controller errors into data.
+                for name in candidates[:12]:
+                    if cancel.is_set():
+                        return result('skipped', '操作已取消，保留当前设置')
+                    try:
+                        reply = self.controller.request('GET', '/proxies/' + urllib.parse.quote(name, safe='') + '/delay?' + query)
+                        if valid(reply.get('delay')):
+                            delays[name] = reply['delay']
+                    except Exception:
+                        pass
+            if not delays:
+                return result('failed', '同组没有可用节点')
+            path = '/proxies/' + urllib.parse.quote(group, safe='')
+            attempted = False
+            try:
+                for name in sorted(delays, key=delays.get)[:2]:
+                    if cancel.is_set():
+                        break
+                    # A manual selection during measurement takes precedence.
+                    current = self.controller.request('GET', '/proxies')['proxies'][group].get('now')
+                    if not attempted and current != original:
+                        return result('skipped', '出口已切换，等待重新检测')
+                    if not attempted:
+                        self.node_switches.append(time.monotonic())
+                        self.node_retry_at = self.node_switches[-1]
+                        attempted = True
+                    self.exit_delay = None; self.exit_state = 'uncertain'
+                    self.recoveries = 0; self.recovery_exit = ''
+                    self.controller.request('PUT', path, {'name': name})
+                    current = self.controller.request('GET', '/proxies')['proxies'][group].get('now')
+                    if current == name and self._probe_exit() is True and not cancel.is_set():
+                        self.failures = 0
+                        return result('done', f'「{group}」从 {original} 切换至 {name}（{delays[name]:g} ms）')
+            except Exception:
+                pass
+            if attempted:
+                try:
+                    self.controller.request('PUT', path, {'name': original})
+                    current = self.controller.request('GET', '/proxies')['proxies'][group].get('now')
+                    if current != original:
+                        raise ValueError()
+                    self.active_exit()
+                except Exception:
+                    self.exit_state = 'uncertain'; self.exit_delay = None
+                    return result('failed', '原节点恢复未确认，请在客户端核对')
+                self.exit_state = 'failed'; self.exit_delay = None
+            return result('failed', '切换后出口仍未通过')
+        except Exception:
+            return result('failed', '节点切换未确认，请连接客户端外部控制接口')
 
     def direct_healthy(self, cancel):
         from .network import Network
@@ -603,6 +939,101 @@ class ProxyProtection:
         if any(value not in ('true','false') for value in flags.values()):
             raise OSError('客户端开关状态待确认')
         return {key:value=='true' for key,value in flags.items()}
+
+    def subscription(self):
+        with self.lock:
+            if self.demo:
+                return {'client': self.client, 'available': True, 'name': '示例订阅', 'kind': 'remote',
+                        'updated_at': (self._demo_at - timedelta(hours=2)).isoformat(timespec='seconds'),
+                        'usage': {'used': 42 * 1024**3, 'total': 200 * 1024**3,
+                                  'expire': (self._demo_at + timedelta(days=20)).isoformat(timespec='seconds')},
+                        'message': ''}
+            return self._subscriptions.read(self.client, self.controller.root)
+
+    def switch_status(self):
+        """Polling never navigates a client window or writes a recovery record."""
+        with self.lock:
+            if self.demo:
+                return {'client': self.client, **self._demo_switches, 'proxy_foreign': False,
+                        'guarded': [], 'restoring': False}
+            proxy, tun, foreign, port = None, None, False, None
+            try:
+                config = self.controller.request('GET', '/configs')
+                candidate = config.get('mixed-port') or config.get('port')
+                if type(candidate) is int and 0 < candidate < 65536:
+                    port = candidate
+                enabled = config.get('tun', {}).get('enable')
+                tun = enabled if type(enabled) is bool else None
+            except Exception:
+                pass
+            try:
+                self._client_flags()  # read-only persisted indicator; actual state wins
+            except Exception:
+                pass
+            try:
+                system = self.system_proxy()
+                if system.get('ProxyEnable') == 0:
+                    proxy = False
+                elif system.get('ProxyEnable') == 1 and port is not None:
+                    proxy = self._owns_proxy(system, port)
+                    foreign = not proxy
+            except Exception:
+                pass
+            guarded, restoring = [], False
+            try:
+                saved = json.loads(self.recovery_path.read_text('utf-8'))
+                guarded = [field for field in saved['fields'] if field in ('proxy', 'tun') and field in saved['completed']]
+                restoring = saved.get('restoring') is True
+            except (OSError, ValueError, KeyError, TypeError, AttributeError):
+                pass
+            return {'client': self.client, 'proxy': proxy, 'tun': tun, 'proxy_foreign': foreign,
+                    'guarded': guarded, 'restoring': restoring}
+
+    def set_switch(self, field, enabled, *, client=None):
+        if not isinstance(field, str) or field not in ('proxy', 'tun') or type(enabled) is not bool:
+            raise ValueError('代理开关设置格式不正确')
+        with self.lock:
+            if client is not None and client != self.client:
+                raise ValueError('客户端已切换，请刷新后重试')
+            if self.demo:
+                self._demo_switches[field] = enabled
+                return self.switch_status()
+            try:
+                saved = self._snapshot() if self.recovery_path.exists() else None
+                if saved and saved.get('restoring'):
+                    raise ValueError('代理恢复尚未完成，请先点击恢复代理')
+                config = self.controller.request('GET', '/configs')
+                port = config.get('mixed-port') or config.get('port')
+                if field == 'proxy' and enabled and (type(port) is not int or not 0 < port < 65536):
+                    raise ValueError('客户端代理端口待确认，请连接客户端后重试')
+                current = self.switches.read()[field]
+                if type(current) is not bool:
+                    raise SwitchStateError('客户端开关状态待确认')
+                if current != enabled:
+                    self.switches.set(field, current, enabled)
+                self._verify_switch(field, enabled, {'port': port})
+                if saved and field in saved['fields']:
+                    for key in ('fields', 'completed', 'attempted', 'restored', 'restore_attempted'):
+                        saved[key] = [name for name in saved.get(key, []) if name != field]
+                    if saved['fields']:
+                        atomic_write(self.recovery_path, json.dumps(saved).encode())
+                    else:
+                        self.recovery_path.unlink()
+                        self._reset_automation()
+                self.failures = 0; self._release_fallback_hold()
+                self.state = 'direct' if self.recovery_path.exists() else 'idle'
+                self.message = '已手动调整，继续检测出口'
+                return self.switch_status()
+            except ClientControlError as exc:
+                if field == 'tun' and exc.code == 'switch_disabled':
+                    raise ValueError('TUN 开关不可用，请先在客户端中安装服务模式') from None
+                raise ValueError(str(exc)) from None
+            except SwitchStateError as exc:
+                raise ValueError(str(exc)) from None
+            except ValueError:
+                raise
+            except Exception:
+                raise ValueError('客户端开关尚未确认，请保持客户端运行后重试') from None
 
     def local_proxy(self):
         """The connected client's loopback HTTP port, or None.
@@ -632,8 +1063,8 @@ class ProxyProtection:
             flags=self._client_flags()
             config=self.controller.request('GET','/configs')
             system=self.system_proxy()
-            actual=bool(config.get('tun',{}).get('enable')) if field=='tun' else system['ProxyEnable']==1
-            matches=flags[field]==desired and actual==desired
+            actual=config.get('tun',{}).get('enable') if field=='tun' else system['ProxyEnable']==1
+            matches=type(actual) is bool and flags[field]==desired and actual==desired
             if field=='proxy' and desired:
                 matches=matches and self._owns_proxy(system,snapshot['port'])
             stable=stable+1 if matches else 0
@@ -660,13 +1091,30 @@ class ProxyProtection:
             atomic_write(path,json.dumps(saved).encode())
         return saved
 
-    def fail_open(self):
+    def fail_open(self, only=None):
         """Use the GUI's own switch handlers, then verify GUI, saved and OS/core states."""
         if self.demo:
             raise ValueError('演示模式不切换系统网络')
+        requested = list(dict.fromkeys(only)) if only is not None else ['tun', 'proxy']
+        if any(field not in ('tun', 'proxy') for field in requested):
+            raise ValueError('代理开关设置格式不正确')
+        if not requested:
+            return False
         path=self.recovery_path
         if path.exists():
             saved=self._snapshot()
+            if saved.get('restoring'):
+                raise ValueError('代理恢复尚未完成，请点击恢复代理')
+            missing = [field for field in requested if field not in saved['fields']]
+            if missing:
+                gui = self.switches.read()
+                system = self.system_proxy()
+                other_proxy = system['ProxyEnable'] == 1 and not self._owns_proxy(system, saved['port'])
+                for field in missing:
+                    if gui[field] and (field != 'proxy' or not other_proxy):
+                        saved['fields'].append(field)
+                        saved['original'][field] = gui[field]
+                atomic_write(path, json.dumps(saved).encode())
         else:
             config=self.controller.request('GET','/configs')
             system=self.system_proxy()
@@ -676,24 +1124,27 @@ class ProxyProtection:
                 # Saved switches and live state agree there is nothing to close:
                 # do not show or navigate the client window on every failed tick.
                 flags=self._client_flags()
-                if not (flags['tun'] or config.get('tun',{}).get('enable') or self._owns_proxy(system,port)
-                        or (flags['proxy'] and not other_proxy)):
+                active = {'tun': flags['tun'] or config.get('tun',{}).get('enable'),
+                          'proxy': self._owns_proxy(system,port) or (flags['proxy'] and not other_proxy)}
+                if not any(active[field] for field in requested):
                     return False
             except (OSError,ValueError,TypeError,AttributeError,KeyError):
                 pass
             gui=self.switches.read()
-            fields=[key for key in ('tun','proxy') if gui[key] and (key!='proxy' or not other_proxy)]
+            fields=[key for key in requested if gui[key] and (key!='proxy' or not other_proxy)]
             if not fields:
-                if bool(config.get('tun',{}).get('enable')):
+                if 'tun' in requested and bool(config.get('tun',{}).get('enable')):
                     raise OSError('客户端与内核开关不一致，请在客户端核对')
                 return False
             saved={'schema':2,'original':gui,'fields':fields,'port':port,'completed':[],
-                   'attempted':[],'restored':[],'restore_attempted':[],'restoring':False,'other_proxy':other_proxy}
+                   'attempted':[],'restored':[],'restore_attempted':[],'restoring':False,'other_proxy':other_proxy,
+                   'at':timestamp()}
             atomic_write(path,json.dumps(saved).encode())
         if saved.get('restoring'):
             raise ValueError('代理恢复尚未完成，请点击恢复代理')
         errors=[]
-        for field in saved['fields']:
+        fields = [field for field in requested if field in saved['fields']]
+        for field in fields:
             try:
                 if field in saved['completed']:
                     self._verify_switch(field,False,saved,wait=False)
@@ -718,14 +1169,16 @@ class ProxyProtection:
                 atomic_write(path,json.dumps(saved).encode())
         if errors:
             raise SwitchStateError('客户端关闭尚未确认：'+'；'.join(errors))
-        return True
+        return bool(fields)
 
-    def restore(self):
+    def restore(self, *, automatic=False):
         with self.lock:
             if self.demo:
                 raise ValueError('演示模式不切换系统网络')
             path=self.recovery_path
             if not path.exists():
+                if self.stale_path.exists():
+                    raise ValueError('代理客户端尚未运行；启动客户端后会自动处理')
                 raise ValueError('没有待恢复的代理设置')
             saved=self._snapshot()
             try:
@@ -782,6 +1235,8 @@ class ProxyProtection:
                     atomic_write(path,json.dumps(saved).encode())
                 path.unlink()
                 self.failures=0; self.state='restored'; self.message='客户端已恢复代理设置'
+                if not automatic:
+                    self._reset_automation()
             except (ValueError, SwitchStateError, ClientControlError) as exc:
                 self.state='error'; self.message=str(exc)
                 raise ValueError(str(exc)) from None
@@ -789,79 +1244,405 @@ class ProxyProtection:
                 self.state='error'; self.message='客户端恢复尚未确认，请保持客户端运行后重试'
                 raise ValueError(self.message) from None
 
-    def tick(self, cancel, event, allowed=lambda: True, *, required_failures=3, switch_allowed=lambda: True):
-        notice = None
-        sampled_exit = ''
+    def tick(self, cancel, event, allowed=lambda: True, *, required_failures=3, switch_allowed=lambda: True,
+             auto_restore=lambda: False, expected_client=None, manual=False):
         with self.lock:
+            if expected_client is not None and expected_client != self.client:
+                return
             if self.demo or cancel.is_set() or not allowed():
                 return
-            try:
-                record = self.recovery_path
-                if record.exists():
-                    saved=self._snapshot()
-                    if saved.get('restoring'):
-                        self.state='error'; self.message='客户端恢复尚未完成，请点击恢复代理'; return
-                    if set(saved['completed'])==set(saved['fields']):
-                        try:
-                            for field in saved['fields']:
-                                self._verify_switch(field,False,saved,wait=False)
-                        except SwitchStateError:
-                            # A verified manual restore retires the old record; a
-                            # partial or stale indicator needs explicit user repair.
-                            # Saved switches and live state decide first, so an unresolved
-                            # record does not operate the client window on every tick.
-                            flags=self._client_flags()
-                            if not all(flags[k]==saved['original'][k] for k in saved['fields']):
-                                raise SwitchStateError('恢复记录与客户端状态不一致，请点击恢复代理')
-                            for field in saved['fields']:
-                                self._verify_switch(field,saved['original'][field],saved,wait=False)
-                            gui=self.switches.read()
-                            if not all(gui[k]==saved['original'][k] for k in saved['fields']):
-                                raise SwitchStateError('恢复记录与客户端状态不一致，请点击恢复代理')
-                            record.unlink()
-                            self.failures=0; self.state='restored'; self.message='客户端已手动恢复，继续检测出口'; return
-                        self.state='direct'; self.message='客户端已关闭代理，等待手动恢复'; return
-                else:
-                    previous_exit = self.egress
-                    healthy = self.proxy_healthy()
-                    sampled_exit = self.egress
-                    if sampled_exit != previous_exit:
-                        self.failures = 0
-                    if healthy is True:
-                        self.failures = 0; self.state = 'healthy'; self.message = '代理出口正常'; return
-                    if healthy is None:
-                        self.failures = 0; self.state = 'uncertain'; self.message = self.probe_reason or '代理出口待确认'; return
-                    if not switch_allowed():
-                        self.failures = 0; self.state = 'failed'; self.message = '代理出口异常，自动关闭尚未开启'; return
-                    if cancel.is_set() or not allowed():
-                        return
-                    if not self.direct_healthy(cancel):
-                        self.failures = 0; self.state = 'uncertain'; self.message = '直连也未通过，保留代理设置'; return
-                    self.failures += 1
-                    self.state = 'checking'; self.message = f'代理出口异常，正在复核 {min(self.failures,required_failures)}/{required_failures}'
-                    if self.failures < required_failures:
-                        return
-                if cancel.is_set() or not allowed() or not switch_allowed():
-                    return
-                if not record.exists() and sampled_exit:
-                    confirmed_leaf = self.active_exit()
-                    if confirmed_leaf is None or self.egress != sampled_exit:
-                        self.failures = 0; self.state = 'uncertain'; self.message = '出口已切换，等待重新检测'; return
-                if self.fail_open():
-                    self.state = 'direct'; self.message = '客户端已关闭代理，状态已核验'
-                    saved=self._snapshot()
-                    notice = ('info', '代理出口异常，客户端已关闭 '+ '、'.join('TUN' if k=='tun' else '系统代理' for k in saved['fields']) + '，已核验；等待手动恢复')
-                else:
-                    self.state = 'idle'; self.message = '未检测到本客户端的系统代理或 TUN'
-            except (SwitchStateError, ValueError, ClientControlError) as exc:
-                self.state='error'; self.message=str(exc)
-            except Exception:
-                if self.state != 'error' and self.failures >= required_failures:
-                    notice = ('error', '代理切换未完成，请在代理客户端中检查 TUN 和系统代理')
-                self.state = 'error'; self.message = '客户端开关尚未确认，请检查客户端窗口、权限或手动恢复'
+            self.checked_at = timestamp()
+            self.exit_state = 'uncertain'
+            notice = self._tick(cancel, allowed, required_failures, switch_allowed, auto_restore, manual)
         # Do not hold the routing lock while the service persists a log record.
         if notice:
             event(*notice)
+
+    def _tick(self, cancel, allowed, required_failures, switch_allowed, auto_restore, manual=False):
+        notice = None
+        sampled_exit = ''
+        try:
+            record = self.recovery_path
+            if record.exists():
+                saved=self._snapshot()
+                if saved.get('restoring'):
+                    self.state='error'; self.message='客户端恢复尚未完成，请点击恢复代理'; return None
+                if set(saved['completed'])==set(saved['fields']):
+                    try:
+                        for field in saved['fields']:
+                            self._verify_switch(field,False,saved,wait=False)
+                    except SwitchStateError:
+                        # A verified manual restore retires the old record; a
+                        # partial or stale indicator needs explicit user repair.
+                        # Saved switches and live state decide first, so an unresolved
+                        # record does not operate the client window on every tick.
+                        flags=self._client_flags()
+                        if not all(flags[k]==saved['original'][k] for k in saved['fields']):
+                            raise SwitchStateError('恢复记录与客户端状态不一致，请点击恢复代理')
+                        for field in saved['fields']:
+                            self._verify_switch(field,saved['original'][field],saved,wait=False)
+                        gui=self.switches.read()
+                        if not all(gui[k]==saved['original'][k] for k in saved['fields']):
+                            raise SwitchStateError('恢复记录与客户端状态不一致，请点击恢复代理')
+                        record.unlink()
+                        self._reset_automation()
+                        self.failures=0; self.state='restored'; self.message='客户端已手动恢复，继续检测出口'; return None
+                    return self._await_recovery(cancel, allowed, saved, auto_restore, switch_allowed)
+            else:
+                previous_exit = self.egress
+                healthy = self._probe_exit()
+                sampled_exit = self.egress
+                if sampled_exit != previous_exit:
+                    self.failures = 0; self._release_fallback_hold()
+                if healthy is True:
+                    self._release_fallback_hold()
+                    if self.restored_at is not None and time.monotonic() - self.restored_at >= FLAP_WINDOW:
+                        self.flaps = 0; self.restored_at = None
+                    self.failures = 0; self.state = 'healthy'; self.message = '代理出口正常'; return None
+                if healthy is None:
+                    self.failures = 0; self.state = 'uncertain'; self.message = self.probe_reason or '代理出口待确认'; return None
+                if not switch_allowed():
+                    self.failures = 0; self.state = 'failed'; self.message = '代理出口异常，自动处置未开启'; return None
+                if cancel.is_set() or not allowed():
+                    return None
+                if not self.direct_healthy(cancel):
+                    self.failures = 0; self.state = 'uncertain'; self.message = '直连也未通过，保留代理设置'; return None
+                self.failures += 1
+                self.state = 'checking'; self.message = f'代理出口异常，正在复核 {min(self.failures,required_failures)}/{required_failures}'
+                if self.failures < required_failures:
+                    return None
+            if cancel.is_set() or not allowed() or not switch_allowed():
+                return None
+            fresh = not record.exists()
+            if not fresh and not self.direct_healthy(cancel):
+                self.state = 'uncertain'; self.message = '直连也未通过，保留代理设置'; return None
+            if fresh and sampled_exit:
+                confirmed_leaf = self.active_exit()
+                if confirmed_leaf is None or self.egress != sampled_exit:
+                    self.failures = 0; self.state = 'uncertain'; self.message = '出口已切换，等待重新检测'; return None
+            if (fresh and not manual and self.fallback_hold_until is not None
+                    and time.monotonic() < self.fallback_hold_until and self._fallback_result):
+                # Same failure episode, already handled with no effect: show that
+                # result instead of re-measuring every node on every tick.
+                self.state, self.message = self._fallback_result
+                return None
+            notice = self._run_fallback(cancel, allowed, switch_allowed, auto_restore, fresh)
+        except (SwitchStateError, ValueError, ClientControlError) as exc:
+            self.state='error'; self.message=str(exc)
+        except Exception:
+            if self.state != 'error' and self.failures >= required_failures:
+                notice = ('error', '代理切换未完成，请在代理客户端中检查 TUN 和系统代理')
+            self.state = 'error'; self.message = '客户端开关尚未确认，请检查客户端窗口、权限或手动恢复'
+        return notice
+
+    def _run_fallback(self, cancel, allowed, switch_allowed, auto_restore, fresh):
+        steps = self.fallback['order']
+        enabled = self.fallback['enabled']
+        expected_exit = self.egress
+        exit_changed = False
+        self.last_fallback = {'at': timestamp(), 'steps': []}
+        records = self.last_fallback['steps']
+        recovered, closed, errors, close_errors = False, False, False, False
+        for step in steps:
+            if not enabled[step]:
+                outcome = {'result': 'skipped', 'detail': '此步骤未开启'}
+            elif recovered:
+                outcome = {'result': 'skipped', 'detail': '切换节点后出口已恢复'}
+            elif cancel.is_set() or not allowed() or not switch_allowed():
+                outcome = {'result': 'skipped', 'detail': '处置已取消，保留当前设置'}
+            elif exit_changed:
+                outcome = {'result': 'skipped', 'detail': '出口已切换，等待重新检测'}
+            else:
+                try:
+                    if expected_exit:
+                        leaf = self.active_exit()
+                        exit_changed = leaf is None or self.egress != expected_exit
+                    if exit_changed:
+                        outcome = {'result': 'skipped', 'detail': '出口已切换，等待重新检测'}
+                    elif step == 'switch_node':
+                        outcome = self._switch_node(cancel)
+                        recovered = outcome['result'] == 'done'
+                        self._recovery_switched = recovered
+                    else:
+                        field = 'tun' if step == 'close_tun' else 'proxy'
+                        changed = self.fail_open(only=[field])
+                        closed = closed or changed
+                        label = 'TUN' if field == 'tun' else '系统代理'
+                        outcome = {'result': 'done' if changed else 'skipped',
+                                   'detail': label + (' 已关闭，状态已核验' if changed else ' 未开启或不属于本客户端')}
+                except (ValueError, SwitchStateError, ClientControlError) as exc:
+                    outcome = {'result': 'failed', 'detail': str(exc)}
+                except Exception:
+                    outcome = {'result': 'failed', 'detail': '客户端开关尚未确认，请在客户端核对'}
+            errors = errors or outcome['result'] == 'failed'
+            close_errors = close_errors or (step != 'switch_node' and outcome['result'] == 'failed')
+            records.append({'step': step, **outcome})
+        if closed and fresh:
+            recent = self.restored_at is not None and time.monotonic() - self.restored_at < FLAP_WINDOW
+            self.flaps = self.flaps + 1 if recent else 0
+            self.restored_at = None; self.recoveries = 0; self.auto_attempts = 0
+        if exit_changed:
+            self.failures = 0; self.exit_state = 'uncertain'
+            self.state = 'uncertain'; self.message = '出口已切换，等待重新检测'
+        elif not any(enabled.values()):
+            self.state = 'failed'; self.message = '代理出口异常，故障处置均未开启'
+        elif close_errors:
+            self.state = 'error'; self.message = '故障处置尚未全部完成，请核对客户端状态'
+        elif closed:
+            self.state = 'direct'
+            self.message = '客户端已关闭代理，状态已核验'
+            if recovered:
+                self.message = '已切换节点，出口恢复，' + ('确认稳定后自动恢复代理' if auto_restore() else '等待手动恢复代理')
+        elif recovered:
+            self.state = 'healthy'; self.message = '已切换节点，代理出口正常'
+        elif not errors:
+            self.state = 'idle'; self.message = '未检测到本客户端的系统代理或 TUN'
+        else:
+            self.state = 'failed'; self.message = '代理出口异常，未关闭本客户端开关'
+        summary = '；'.join(row['detail'] for row in records if enabled[row['step']])
+        notice = ('error' if errors else 'info', '代理故障处置：' + (summary or self.message))
+        no_effect = fresh and not closed and not recovered and not exit_changed
+        if not no_effect:
+            self._release_fallback_hold()
+            return notice
+        self.fallback_hold_until = time.monotonic() + NODE_RETRY_INTERVAL
+        self._fallback_result = (self.state, self.message)
+        if notice == self._fallback_notice:
+            return None  # the same no-op outcome is already in the log
+        self._fallback_notice = notice
+        return notice
+
+    def _await_recovery(self, cancel, allowed, saved, auto_restore, switch_allowed=lambda: True):
+        """The proxy is closed and verified. Optionally bring it back once the exit is stable."""
+        self.state = 'direct'
+        notice = None
+        # Detection also runs when restoration is disabled or paused. The core's
+        # node probe does not require system proxy or TUN to be enabled.
+        healthy = self._probe_exit()
+        if (healthy is False and self.fallback['enabled']['switch_node'] and not self.node_switch_paused
+                and (self.node_retry_at is None or time.monotonic() - self.node_retry_at >= NODE_RETRY_INTERVAL)
+                and not cancel.is_set() and allowed() and switch_allowed() and self.direct_healthy(cancel)):
+            self.node_retry_at = time.monotonic()
+            outcome = self._switch_node(cancel)
+            self.last_fallback = {'at': timestamp(), 'steps': [{'step': 'switch_node', **outcome}]}
+            notice = ('error' if outcome['result'] == 'failed' else 'info', '代理故障处置：' + outcome['detail'])
+            if outcome['result'] == 'done':
+                healthy = True
+                self._recovery_switched = True
+            else:
+                self._recovery_switched = False
+        sampled_exit = self.egress
+        if not auto_restore():
+            self.recoveries = 0; self.recovery_exit = ''
+            label = '代理出口正常' if healthy is True else '代理出口异常' if healthy is False else '代理出口待确认'
+            self.message = ('已切换节点，出口恢复' if healthy is True and self._recovery_switched else label) + '，等待手动恢复代理'
+            return notice
+        if self.flaps >= MAX_FLAPS:
+            self.message = '代理出口反复异常，已停止自动恢复，请手动恢复'
+            return notice
+        if self.auto_attempts >= MAX_AUTO_ATTEMPTS:
+            self.message = '自动恢复未完成，请点击恢复代理'
+            return notice
+        if healthy is not True:
+            self.recoveries = 0; self.recovery_exit = ''
+            self.message = '客户端已关闭代理，出口恢复后自动恢复'
+            return notice
+        if sampled_exit != self.recovery_exit:
+            self.recoveries = 0; self.recovery_exit = sampled_exit
+        self.recoveries += 1
+        if self.recoveries < RECOVERY_ROUNDS * 2 ** self.flaps:
+            self.message = '代理出口已恢复，确认稳定后自动恢复代理'
+            return notice
+        if cancel.is_set() or not allowed() or not auto_restore():
+            return notice
+        # Do not combine healthy samples from different nodes or restore after
+        # the selection changed while a probe was in flight.
+        try:
+            same_exit = self.active_exit() is not None and self.egress == sampled_exit
+        except Exception:
+            same_exit = False
+        if not same_exit:
+            self.recoveries = 0; self.recovery_exit = ''; self.exit_state = 'uncertain'
+            self.message = '出口已切换，重新确认后再恢复代理'
+            return notice
+        self.recoveries = 0
+        labels = '、'.join('TUN' if key == 'tun' else '系统代理' for key in saved['fields'])
+        try:
+            self.restore(automatic=True)
+        except ValueError:
+            self.auto_attempts += 1  # restore() has already recorded the state and message
+            return notice
+        self.auto_attempts = 0
+        self.restored_at = time.monotonic()
+        self.message = '代理出口恢复正常，已自动恢复代理'
+        return ('info', '代理出口恢复正常，已自动恢复 ' + labels)
+
+    # ---- a system proxy left behind by a client that is no longer listening ----
+
+    @staticmethod
+    def _port_listening(port):
+        """True, False for an explicit refusal, or None when it cannot be told.
+
+        Windows answers a closed loopback port only after about two seconds,
+        so a shorter timeout would never see the refusal.
+        """
+        try:
+            with socket.create_connection(('127.0.0.1', port), timeout=4):
+                return True
+        except ConnectionRefusedError:
+            return False
+        except OSError:
+            return None
+
+    @staticmethod
+    def write_system_proxy(enabled):
+        """Only for a proxy whose owner is not listening; a live client uses its own switch."""
+        import winreg
+        path = r'Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, 'ProxyEnable', 0, winreg.REG_DWORD, 1 if enabled else 0)
+        wininet = ctypes.WinDLL('wininet', use_last_error=True)
+        wininet.InternetSetOptionW.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD]
+        wininet.InternetSetOptionW.restype = wintypes.BOOL
+        for option in (39, 37):  # INTERNET_OPTION_SETTINGS_CHANGED, INTERNET_OPTION_REFRESH
+            wininet.InternetSetOptionW(None, option, None, 0)
+
+    def _stale_port(self, system):
+        """The selected client's own loopback port when the system proxy points only at it."""
+        server = system.get('ProxyServer') or ''
+        if system.get('ProxyEnable') != 1 or not server:
+            return None
+        ports = set()
+        for part in server.split(';'):
+            match = re.fullmatch(r'(?:https?=|socks=)?(?:127\.0\.0\.1|localhost):(\d{1,5})', part.strip())
+            if not match:
+                return None
+            ports.add(int(match[1]))
+        if len(ports) != 1:
+            return None
+        port = ports.pop()
+        try:
+            text = self.controller.runtime()
+        except (OSError, ValueError, TypeError):
+            return None
+        # Another client's proxy is never touched: the port has to be this client's.
+        if not isinstance(text, str) or str(port) not in {scalar(text, key) for key in ('mixed-port', 'port')}:
+            return None
+        return port if 0 < port < 65536 else None
+
+    def _stale_record(self):
+        try:
+            saved = json.loads(self.stale_path.read_text('utf-8'))
+            if isinstance(saved, dict) and isinstance(saved.get('server'), str) and type(saved.get('port')) is int:
+                return saved
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def stale_tick(self, cancel, event, enabled=lambda: True):
+        """Close a system proxy whose client stopped listening, and retire the record later.
+
+        Returns True while this is the state to show, so the caller can skip
+        the exit probe that needs a running client.
+        """
+        notice = None
+        with self.lock:
+            if self.demo or cancel.is_set() or self.recovery_path.exists():
+                return False
+            try:
+                handled, notice = self._stale(cancel, enabled)
+                if handled:
+                    self.exit_state = 'uncertain'
+            except Exception:
+                self.stale_failures = 0
+                handled = False
+        if notice:
+            event(*notice)
+        return handled
+
+    def _stale(self, cancel, enabled):
+        record = self.stale_path
+        system = self.system_proxy()
+        if record.exists():
+            saved = self._stale_record()
+            if saved is None:
+                record.unlink(missing_ok=True)
+                return False, None
+            self.checked_at = timestamp()
+            if system['ProxyEnable'] == 1 or system['ProxyServer'] != saved['server']:
+                record.unlink(); self.recoveries = 0
+                self.state = 'restored'; self.message = '系统代理已重新设置，继续检测'
+                return False, ('info', '系统代理已由客户端重新设置')
+            if self._port_listening(saved['port']) is not True:
+                self.recoveries = 0
+                self.state = 'direct'; self.message = '代理客户端未运行，已关闭残留的系统代理'
+                return True, None
+            wanted = False
+            if self.auto_restore:
+                try:
+                    wanted = self._client_flags()['proxy'] is True
+                except Exception:
+                    wanted = False
+            if not wanted:
+                record.unlink(); self.recoveries = 0
+                self.state = 'restored'; self.message = '代理客户端已重新运行，系统代理保持关闭'
+                return False, ('info', '代理客户端已重新运行；系统代理保持关闭，可在客户端中开启')
+            self.recoveries += 1
+            if self.recoveries < STALE_RECOVERY_ROUNDS:
+                self.state = 'direct'; self.message = '代理客户端已重新运行，确认后恢复系统代理'
+                return True, None
+            self.recoveries = 0
+            record.unlink()
+            try:
+                self.write_system_proxy(True)
+                if self.system_proxy()['ProxyEnable'] != 1:
+                    raise OSError()
+            except Exception:
+                self.state = 'error'; self.message = '系统代理恢复未完成，请在客户端中开启'
+                return True, ('error', '系统代理恢复未完成，请在代理客户端中开启')
+            self.state = 'restored'; self.message = '代理客户端已重新运行，已恢复系统代理'
+            return False, ('info', '代理客户端已重新运行，已恢复系统代理')
+
+        if not enabled():
+            self.stale_failures = 0
+            return False, None
+        port = self._stale_port(system)
+        if port is None or self._port_listening(port) is not False:
+            self.stale_failures = 0
+            return False, None
+        now = time.monotonic()
+        self.stale_clears = [moment for moment in self.stale_clears if now - moment < 600]
+        self.checked_at = timestamp()
+        if len(self.stale_clears) >= 3:
+            # Something keeps re-enabling a proxy nobody serves; stop fighting it.
+            self.state = 'error'; self.message = '系统代理被反复重新开启且端口无响应，请在客户端中处理'
+            return True, None
+        self.stale_failures += 1
+        if self.stale_failures < STALE_ROUNDS:
+            self.state = 'checking'; self.message = '代理端口无响应，正在复核'
+            return True, None
+        if cancel.is_set():
+            return False, None
+        if not self.direct_healthy(cancel):
+            self.stale_failures = 0
+            self.state = 'uncertain'; self.message = '直连也未通过，保留系统代理'
+            return True, None
+        if self.system_proxy() != system or self._port_listening(port) is not False:
+            self.stale_failures = 0
+            return False, None
+        self.stale_failures = 0
+        atomic_write(record, json.dumps({'schema':1, 'server':system['ProxyServer'], 'port':port, 'at':timestamp()}).encode())
+        try:
+            self.write_system_proxy(False)
+            if self.system_proxy()['ProxyEnable'] != 0:
+                raise OSError()
+        except Exception:
+            record.unlink(missing_ok=True)
+            self.state = 'error'; self.message = '残留的系统代理关闭未完成，请在系统设置中关闭代理'
+            return True, ('error', '残留的系统代理关闭未完成，请在系统设置中关闭代理')
+        self.stale_clears.append(now)
+        self.state = 'direct'; self.message = '代理客户端未运行，已关闭残留的系统代理'
+        return True, ('info', '代理客户端未运行且端口无响应，已关闭残留的系统代理')
 
     def remove(self, paths, identifiers):
         with self.lock:

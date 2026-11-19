@@ -196,6 +196,24 @@ class ApiTests(unittest.TestCase):
         for private in ("sample-user", "sample-secret", "sample-private-wifi", str(self.store.root)):
             self.assertNotIn(private, diagnostic)
 
+    def test_proxy_options_and_quiet_connect_stay_out_of_settings_and_logs(self):
+        from njust_wifi.storage import DEFAULTS
+        code, reply = self.call('/api/proxy/connect')
+        self.assertEqual((code, reply['connected'], reply['groups']), (200, True, ['示例代理']))
+        entries = len(self.call('/api/logs')[1]['entries'])
+        self.call('/api/proxy/connect')
+        self.assertEqual(len(self.call('/api/logs')[1]['entries']), entries)
+        self.assertEqual(self.call('/api/proxy/options', {'auto_restore': True})[0], 200)
+        status = self.call('/api/proxy')[1]
+        self.assertEqual((status['auto_restore'], status['clear_stale'], status['closed']), (True, False, []))
+        for body in ({'clear_stale': 'yes'}, {'other': True}):
+            self.assertEqual(self.call('/api/proxy/options', body)[0], 400)
+        self.assertEqual(self.call('/api/proxy/connect', headers={'X-NJUST-Token': ''})[0], 403)
+        # The older boot copy rejects unknown keys in settings.json, so the options stay elsewhere.
+        self.assertLessEqual(set(self.call('/api/config')[1]) - {'username_masked', 'has_credentials'}, set(DEFAULTS))
+        self.assertLessEqual(set(self.store.settings), set(DEFAULTS))
+        self.assertIn('设置代理保护选项（出口恢复后自动恢复开启）', json.dumps(self.call('/api/logs')[1], ensure_ascii=False))
+
     def test_plain_controller_settings_require_token_and_never_enter_status_or_diagnostics(self):
         self.assertEqual(self.call('/api/proxy/controller', {'client':'clash-verge',
             'url':'http://127.0.0.1:9097','secret':'fixture-controller-key'})[0], 200)
@@ -430,6 +448,48 @@ class ApiTests(unittest.TestCase):
                 self.assertEqual(reopened.logs()[1]['message'], records[-1]['message'])
             finally:
                 reopened.close()
+
+
+class ProxyNodeApiTests(unittest.TestCase):
+    setUp = ApiTests.setUp
+    tearDown = ApiTests.tearDown
+    call = ApiTests.call
+
+    def test_node_endpoints_require_local_session_and_do_not_change_protection(self):
+        for path in ('/api/proxy/nodes', '/api/proxy/check'):
+            self.assertEqual(self.call(path, headers={'X-NJUST-Token': ''})[0], 403)
+        before = self.store.settings.copy()
+        code, data = self.call('/api/proxy/nodes')
+        self.assertEqual(code, 200)
+        selected = next(g for g in data['groups'] if g['selectable'])
+        chosen = next(n for n in selected['all'] if n != selected['selected'])
+        self.assertEqual(self.call('/api/proxy/node', {'client': data['client'], 'group': selected['name'], 'node': chosen})[0], 200)
+        current = self.call('/api/proxy/nodes')[1]
+        self.assertEqual(next(g for g in current['groups'] if g['name'] == selected['name'])['selected'], chosen)
+        self.assertEqual(before, self.store.settings)
+        self.assertIn('切换代理节点 · Clash Verge：已完成', [e['message'] for e in self.service.logs()])
+
+    def test_invalid_selection_is_rejected_and_audited(self):
+        code, _ = self.call('/api/proxy/node', {'client': 'flclash', 'group': '示例代理', 'node': '日本 01'})
+        self.assertEqual(code, 400)
+        self.assertIn('切换代理节点 · Clash Verge：未完成', [e['message'] for e in self.service.logs()])
+
+    def test_manual_check_api_returns_correlated_final_result(self):
+        with patch.object(self.service.proxy, 'tick') as tick:
+            def complete(*args, **kwargs):
+                self.service.proxy.exit_state = 'failed'
+                self.service.proxy.message = '代理出口异常'
+            tick.side_effect = complete
+            code, submitted = self.call('/api/proxy/check', {})
+            self.assertEqual(code, 200)
+            self.assertIsInstance(submitted.get('check_id'), str)
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                status = self.call('/api/proxy/check')[1]
+                if status['state'] == 'done': break
+                time.sleep(.01)
+            self.assertEqual(status['id'], submitted['check_id'])
+            self.assertEqual(status['result']['exit_state'], 'failed')
 
 
 if __name__ == "__main__":

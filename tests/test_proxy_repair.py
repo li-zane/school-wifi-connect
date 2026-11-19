@@ -121,5 +121,33 @@ class ProxyRepairTests(unittest.TestCase):
                 subject.read()
         self.assertIn('管理员', str(raised.exception))
 
+    def test_background_control_errors_keep_recovery_record_and_never_retry_toggle(self):
+        from njust_wifi.client_control import ClientControlError
+        self.switches.set.side_effect = ClientControlError('客户端后台控件未就绪')
+        with self.assertRaisesRegex(OSError, '后台控件'):
+            self.proxy.fail_open()
+        saved = json.loads(self.proxy.recovery_path.read_text())
+        self.assertEqual(saved['attempted'], ['tun', 'proxy'])
+        self.assertEqual(saved['completed'], [])
+        self.assertEqual(self.gui, {'proxy': True, 'tun': True})
+        self.assertEqual(self.switches.set.call_count, 2)
+        self.switches.set.reset_mock()
+        with self.assertRaises(OSError):
+            self.proxy.fail_open()
+        self.switches.set.assert_not_called()
+
+    def test_hidden_client_failure_is_actionable_without_window_show_fallback(self):
+        from njust_wifi.client_control import ClientControlError, ClientSwitches
+        from unittest.mock import patch
+        subject = ClientSwitches(self.root, 'clash-verge')
+        subject._executable = Mock(return_value='bridge.exe')
+        reply = Mock(returncode=1, stdout=b'{"ok":false,"error":"settings_unavailable"}')
+        with patch('njust_wifi.client_control.subprocess.run', return_value=reply) as run:
+            with self.assertRaisesRegex(ClientControlError, '后台控件'):
+                subject.read()
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], ['bridge.exe', 'clash-verge', 'read'])
+        self.assertEqual(run.call_args.kwargs['creationflags'], 0x08000000)
+
 if __name__ == '__main__':
     unittest.main()

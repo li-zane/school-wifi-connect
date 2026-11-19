@@ -179,7 +179,8 @@ class ProxyTests(unittest.TestCase):
         self.proxy.fail_open=Mock(return_value=True)
         self.proxy._snapshot=Mock(return_value={'fields':['tun','proxy']})
         self.proxy.tick(threading.Event(),Mock(),required_failures=1)
-        self.proxy.fail_open.assert_called_once()
+        self.assertEqual([c.kwargs for c in self.proxy.fail_open.call_args_list],
+                         [{'only': ['tun']}, {'only': ['proxy']}])
         self.assertEqual(self.proxy.state,'direct')
 
     def test_controller_failure_or_unsupported_delay_is_unknown_not_exit_failure(self):
@@ -249,7 +250,8 @@ class ProxyTests(unittest.TestCase):
             self.proxy.tick(threading.Event(),event)
         self.proxy.fail_open.assert_not_called()
         self.proxy.tick(threading.Event(),event)
-        self.proxy.fail_open.assert_called_once()
+        self.assertEqual([c.kwargs for c in self.proxy.fail_open.call_args_list],
+                         [{'only': ['tun']}, {'only': ['proxy']}])
         event.assert_called_once()
 
     def test_uncertain_direct_or_disabled_switch_never_changes_network(self):

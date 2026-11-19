@@ -1,4 +1,4 @@
-// On-demand UI Automation bridge. All writes invoke the client's own switches.
+// On-demand background UI Automation bridge. Writes invoke the client's own switches.
 // No registry, configuration-file, keyboard, pixel or core-IPC writes.
 using System;
 using System.Diagnostics;
@@ -14,8 +14,6 @@ public static class ProxyClientBridge {
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindow callback, IntPtr data);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr handle, out uint id);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr handle, StringBuilder text, int count);
-    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr handle);
-    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr handle, int command);
     [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint id);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("advapi32.dll")] static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
@@ -144,6 +142,15 @@ public static class ProxyClientBridge {
             finally { CloseHandle(token); }
         } finally { CloseHandle(process); }
     }
+    internal static string OperateWindow(IntPtr handle, string client, bool setting, string field, bool expected, bool desired) {
+        var root=AutomationElement.FromHandle(handle);
+        // UIA Invoke/Toggle do not need a visible or foreground window.
+        // A client that destroys its UI in the tray must report unavailable;
+        // never materialize/restore a window merely to operate its switches.
+        Navigate(root,client);
+        if(setting) Set(root,field,expected,desired);
+        return "{\"ok\":true,\"proxy\":"+Read(root,"proxy").ToString().ToLowerInvariant()+",\"tun\":"+Read(root,"tun").ToString().ToLowerInvariant()+"}";
+    }
     [STAThread] public static int Main(string[] args) {
         Console.OutputEncoding=new UTF8Encoding(false);
         try {
@@ -151,20 +158,8 @@ public static class ProxyClientBridge {
             bool setting=args[1]=="set";
             if(setting && (args.Length!=5 || (args[2]!="proxy" && args[2]!="tun"))) throw new ArgumentException();
             var handle=Window(args[0]);
-            bool wasHidden=!IsWindowVisible(handle);
-            object windowPattern;
-            var root=AutomationElement.FromHandle(handle);
-            bool minimized=root.TryGetCurrentPattern(WindowPattern.Pattern,out windowPattern) && ((WindowPattern)windowPattern).Current.WindowVisualState==WindowVisualState.Minimized;
-            if(wasHidden) ShowWindow(handle,4); // show without activation; never launch a second client
-            if(minimized) ((WindowPattern)windowPattern).SetWindowVisualState(WindowVisualState.Normal);
-            try {
-                Navigate(root,args[0]);
-                if(setting) Set(root,args[2],Boolean.Parse(args[3]),Boolean.Parse(args[4]));
-                Console.WriteLine("{\"ok\":true,\"proxy\":"+Read(root,"proxy").ToString().ToLowerInvariant()+",\"tun\":"+Read(root,"tun").ToString().ToLowerInvariant()+"}");
-            } finally {
-                if(minimized) ((WindowPattern)windowPattern).SetWindowVisualState(WindowVisualState.Minimized);
-                if(wasHidden) ShowWindow(handle,0);
-            }
+            Console.WriteLine(OperateWindow(handle,args[0],setting,setting ? args[2] : null,
+                setting && Boolean.Parse(args[3]),setting && Boolean.Parse(args[4])));
             return 0;
         } catch (Exception error) {
             string code="client_switch_unavailable";

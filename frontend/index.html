@@ -11,6 +11,11 @@
 </head>
 <body>
   <div id="toast-bar" class="toast-bar hidden" role="status" aria-live="polite" aria-atomic="true" popover="manual"></div>
+  <div id="proxy-check-toast" class="proxy-check-toast" hidden popover="manual" data-state="loading">
+    <span class="proxy-check-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path id="proxy-check-symbol" d="m6 12 4 4 8-8"/></svg></span>
+    <div class="proxy-check-copy" role="status" aria-live="polite" aria-atomic="true"><strong id="proxy-check-title">正在检测代理出口</strong><p id="proxy-check-message"></p></div>
+    <button id="proxy-check-dismiss" type="button" class="icon-btn icon-btn-sm" aria-label="关闭检测提示"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+  </div>
 
   <div class="app">
     <header class="titlebar" data-window-drag>
@@ -159,6 +164,7 @@
                   <div><dt>备用队列</dt><dd id="summary-fallbacks">—</dd></div>
                   <div><dt>守护程序</dt><dd id="summary-probes">—</dd></div>
                   <div><dt>请求通路</dt><dd id="summary-path">—</dd></div>
+                  <div><dt>代理保护</dt><dd id="summary-proxy">—</dd></div>
                 </dl>
                 <button id="btn-export-diag" class="btn btn-sm overview-export" type="button">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -331,10 +337,9 @@
       <!-- 守护 -->
       <section id="panel-probes" class="tab-panel" role="tabpanel" aria-labelledby="tab-btn-probes" hidden>
         <div class="page stack">
-          <section class="card proxy-card">
+          <section class="card proxy-card" aria-labelledby="proxy-card-title">
             <header class="card-head">
-              <h3 class="card-title">代理保护</h3>
-              <span id="proxy-status" class="card-sub">未启用</span>
+              <h3 id="proxy-card-title" class="card-title">代理客户端</h3>
               <button id="proxy-guide-open" type="button" class="btn btn-sm btn-ghost card-head-end">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <circle cx="12" cy="12" r="9"/>
@@ -344,11 +349,20 @@
                 <span>配置教程</span>
               </button>
             </header>
+            <div id="proxy-state" class="proxy-state state-idle" role="status" aria-live="polite">
+              <span id="proxy-state-chip" class="status-chip state-idle">未启用</span>
+              <span id="proxy-status" class="proxy-state-message">未启用</span>
+              <span id="proxy-checked" class="proxy-state-time"></span>
+              <p id="proxy-detail" class="proxy-state-detail" hidden></p>
+            </div>
             <div class="rows">
               <div class="row">
                 <div class="row-text">
-                  <label for="proxy-client" class="row-title">客户端</label>
-                  <span class="row-hint">连接后可读取代理组并为程序设置分流</span>
+                  <span class="row-title-line">
+                    <label for="proxy-client" class="row-title">客户端</label>
+                    <span id="proxy-connection" class="chip chip-muted" hidden>未连接</span>
+                  </span>
+                  <span class="row-hint">连接后读取订阅、节点和开关状态</span>
                 </div>
                 <div class="row-control">
                   <select id="proxy-client" class="input"><option value="clash-verge">Clash Verge</option><option value="flclash">FlClash</option></select>
@@ -357,22 +371,53 @@
               </div>
               <div class="row">
                 <div class="row-text">
-                  <label for="proxy-group" class="row-title">守护代理组</label>
-                  <span class="row-hint">「代理 / TUN」分流的程序走这个代理组</span>
+                  <span class="row-title">订阅</span>
+                  <span class="row-hint">只读显示；切换订阅请在客户端中操作</span>
+                </div>
+                <div id="proxy-sub" class="proxy-sub" data-state="empty">
+                  <span id="proxy-sub-name" class="proxy-sub-name">—</span>
+                  <meter id="proxy-sub-meter" class="proxy-sub-meter" min="0" max="1" low="0.8" high="0.95" optimum="0" value="0" aria-label="订阅流量已用比例" hidden></meter>
+                  <span id="proxy-sub-meta" class="proxy-sub-meta"></span>
+                </div>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <span class="row-title">节点</span>
+                  <span id="proxy-node-current" class="row-hint proxy-node-current">连接客户端后显示当前出口</span>
+                </div>
+                <div class="row-control"><button id="proxy-nodes-open" type="button" class="btn btn-sm" disabled>选择节点</button></div>
+              </div>
+              <div class="row">
+                <div class="row-text">
+                  <label for="proxy-group" class="row-title">分流代理组</label>
+                  <span class="row-hint">守护列表里设为「代理 / TUN」的程序走这个组</span>
                 </div>
                 <select id="proxy-group" class="input"><option value="">未选择</option></select>
               </div>
-              <label class="row">
+              <label class="row proxy-switch-row" data-field="proxy">
                 <span class="row-text">
-                  <span class="row-title">代理出口异常时关闭系统代理和 TUN</span>
-                  <span class="row-hint">出口探测失败而 WiFi 直连正常时切换，不自动切回</span>
+                  <span class="row-title-line">
+                    <span class="row-title">系统代理</span>
+                    <span id="proxy-sw-proxy-chip" class="chip chip-muted" hidden></span>
+                  </span>
+                  <span id="proxy-sw-proxy-hint" class="row-hint">浏览器等读取系统代理的程序走代理</span>
                 </span>
-                <input id="proxy-fail-open" type="checkbox" class="switch">
+                <input id="proxy-sw-proxy" type="checkbox" class="switch" aria-describedby="proxy-sw-proxy-hint" disabled>
+              </label>
+              <label class="row proxy-switch-row" data-field="tun">
+                <span class="row-text">
+                  <span class="row-title-line">
+                    <span class="row-title">TUN</span>
+                    <span id="proxy-sw-tun-chip" class="chip chip-muted" hidden></span>
+                  </span>
+                  <span id="proxy-sw-tun-hint" class="row-hint">接管全部流量，包括不读系统代理的程序</span>
+                </span>
+                <input id="proxy-sw-tun" type="checkbox" class="switch" aria-describedby="proxy-sw-tun-hint" disabled>
               </label>
               <div class="row">
                 <div class="row-text">
                   <span class="row-title">代理出口</span>
-                  <span id="proxy-egress" class="row-hint" hidden></span>
+                  <span class="row-hint">立即检测当前节点；被故障保护关闭的开关可一键恢复</span>
                 </div>
                 <div class="row-control">
                   <button id="proxy-check" type="button" class="btn btn-sm">检测出口</button>
@@ -401,6 +446,50 @@
                 <button id="proxy-controller-reset" type="button" class="btn btn-sm">自动读取</button>
               </div>
             </details>
+          </section>
+
+          <section class="card proxy-guard-card" aria-labelledby="proxy-guard-title">
+            <header class="card-head">
+              <h3 id="proxy-guard-title" class="card-title">故障保护</h3>
+            </header>
+            <p class="card-note">代理出口连续检测失败、而 WiFi 直连正常时，按顺序自动处置，保住校园网登录和值守程序的网络。</p>
+            <div class="rows">
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">出口异常时自动处置</span>
+                  <span class="row-hint">关闭后只检测和提示，不改动代理设置</span>
+                </span>
+                <input id="proxy-fail-open" type="checkbox" class="switch">
+              </label>
+            </div>
+            <div id="proxy-fallback" class="proxy-chain" data-active="false">
+              <div class="chain-head">
+                <span id="proxy-fallback-label" class="slot-label">处置顺序</span>
+                <span id="proxy-fallback-saving" class="chain-saving" role="status" aria-live="polite"></span>
+              </div>
+              <ol id="proxy-fallback-list" class="chain-list" aria-labelledby="proxy-fallback-label"></ol>
+              <p id="proxy-fallback-hint" class="chain-hint"></p>
+              <div id="proxy-fallback-last" class="chain-last" hidden>
+                <span class="chain-last-head">上次处置 <time id="proxy-fallback-last-time"></time></span>
+                <ul id="proxy-fallback-last-steps" class="chain-last-steps" role="list"></ul>
+              </div>
+            </div>
+            <div class="rows">
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">出口恢复后自动恢复代理</span>
+                  <span class="row-hint">出口稳定后恢复被关闭的开关；关闭则等你手动恢复</span>
+                </span>
+                <input id="proxy-auto-restore" type="checkbox" class="switch">
+              </label>
+              <label class="row">
+                <span class="row-text">
+                  <span class="row-title">客户端退出后清理残留的系统代理</span>
+                  <span class="row-hint">系统代理仍指向已退出的客户端时关闭它；不动其他程序设置的代理</span>
+                </span>
+                <input id="proxy-clear-stale" type="checkbox" class="switch">
+              </label>
+            </div>
           </section>
 
           <section class="card probes-card">
@@ -461,6 +550,16 @@
       <span id="version-text" class="statusbar-version">v--</span>
     </footer>
   </div>
+
+  <dialog id="modal-proxy-nodes" class="modal modal-wide" aria-labelledby="proxy-nodes-title">
+    <div class="modal-card proxy-nodes-card">
+      <div class="modal-head"><h3 id="proxy-nodes-title" class="modal-title">代理节点</h3><button id="proxy-nodes-close" type="button" class="modal-close" aria-label="关闭节点选择">&times;</button></div>
+      <label class="field"><span class="slot-label">代理组</span><select id="proxy-node-group" class="input" disabled><option value="">正在读取…</option></select></label>
+      <input id="proxy-node-search" type="search" class="input" placeholder="搜索节点" aria-label="搜索节点" autocomplete="off" disabled>
+      <ul id="proxy-node-list" class="proxy-node-list" role="list" aria-label="代理节点列表" aria-busy="false"></ul>
+      <div class="proxy-nodes-footer"><span id="proxy-nodes-state" role="status" aria-live="polite"></span><button id="proxy-nodes-refresh" type="button" class="btn btn-sm">刷新</button></div>
+    </div>
+  </dialog>
 
   <dialog id="modal-update" class="modal" aria-labelledby="update-title">
     <div class="modal-card">

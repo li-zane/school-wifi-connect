@@ -16,6 +16,7 @@ ASSETS = {"/": ("index.html", "text/html; charset=utf-8"),
           "/autosave.js": ("autosave.js", "text/javascript; charset=utf-8"),
           "/window.js": ("window.js", "text/javascript; charset=utf-8"),
           "/proxy.js": ("proxy.js", "text/javascript; charset=utf-8"),
+          "/proxy-controls.js": ("proxy-controls.js", "text/javascript; charset=utf-8"),
           "/updates.js": ("updates.js", "text/javascript; charset=utf-8"),
           "/onboarding.css": ("onboarding.css", "text/css; charset=utf-8"),
           "/logo.webp": ("logo.webp", "image/webp")}
@@ -124,6 +125,20 @@ class Handler(BaseHTTPRequestHandler):
             self.send(200, service.proxy.status() | {'enabled':service.store.settings['proxy_fail_open']})
         elif self.path == "/api/proxy/controller":
             self.send(200, service.proxy.controller_view())
+        elif self.path == "/api/proxy/switches":
+            self.send(200, service.proxy.switch_status())
+        elif self.path == "/api/proxy/subscription":
+            self.send(200, service.proxy.subscription())
+        elif self.path == "/api/proxy/check":
+            self.send(200, service.proxy_check_status())
+        elif self.path == "/api/proxy/nodes":
+            try:
+                self.send(200, service.proxy.node_choices())
+            except ValueError as exc:
+                self.send(400, {'error': str(exc)})
+        elif self.path == "/api/proxy/connect":
+            # Opened by the page itself, so it is neither audited nor an error when the client is off.
+            self.send(200, service.proxy.connect())
         elif self.path == "/api/proxy/groups":
             try:
                 self.send(200, {'groups':service.proxy.groups()})
@@ -194,8 +209,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, {"candidates": service.browse()})
                 service.audit(operation)
                 return
-            elif self.path in ('/api/proxy/policy','/api/proxy/group','/api/proxy/restore','/api/proxy/check','/api/proxy/client','/api/proxy/controller'):
-                service.proxy_action(self.path.rsplit('/',1)[1], raw)
+            elif self.path in ('/api/proxy/policy','/api/proxy/group','/api/proxy/restore','/api/proxy/check','/api/proxy/client','/api/proxy/controller','/api/proxy/options','/api/proxy/node','/api/proxy/switch','/api/proxy/fallback'):
+                result = service.proxy_action(self.path.rsplit('/',1)[1], raw)
+                if result is not None:
+                    service.audit(operation)
+                    self.send(200, result if self.path in ('/api/proxy/switch', '/api/proxy/fallback') else {'ok': True} | result)
+                    return
             elif self.path in ("/api/probes/add", "/api/probes/remove", "/api/probes/clear", "/api/probes/elevate"):
                 service.probe_action(self.path.rsplit("/", 1)[1], raw)
             elif self.path == "/api/logs/clear":

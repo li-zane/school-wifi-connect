@@ -1582,7 +1582,7 @@ function switchTab(targetTabId) {
     panel.classList.toggle('active', isMatch);
     panel.hidden = !isMatch;
   });
-  if (targetTabId === 'panel-probes') loadProbes();
+  if (targetTabId === 'panel-probes') { loadProbes(); proxyUI?.connect(); }
   if (targetTabId === 'panel-logs') loadLogs();
   syncLogClock();
 }
